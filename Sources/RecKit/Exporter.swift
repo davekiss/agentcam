@@ -41,8 +41,8 @@ public enum Exporter {
         return ExportResult(take: takeDir.path, exports: exports)
     }
 
-    /// Inserts each track at its take-clock offset, so composition time equals take time.
-    private static func insert(_ track: Track, from dir: URL, media: AVMediaType, into composition: AVMutableComposition) async throws -> AVMutableCompositionTrack? {
+    /// Places each track at its offset relative to `head`, trimming whatever it recorded before `head`.
+    private static func insert(_ track: Track, head: Double, from dir: URL, media: AVMediaType, into composition: AVMutableComposition) async throws -> AVMutableCompositionTrack? {
         let url = dir.appendingPathComponent(track.file)
         guard FileManager.default.fileExists(atPath: url.path) else {
             if track.kind == .screen { throw CommandError(.invalidTake, "missing \(track.file)") }
@@ -57,7 +57,10 @@ public enum Exporter {
         guard let target = composition.addMutableTrack(withMediaType: media, preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw CommandError(.exportFailed, "could not add a \(media.rawValue) track")
         }
-        try target.insertTimeRange(range, of: source, at: CMTime(seconds: track.offset, preferredTimescale: 600))
+        let trim = CMTime(seconds: max(0, head - track.offset), preferredTimescale: 600)
+        guard trim < range.duration else { return nil }
+        let kept = CMTimeRange(start: range.start + trim, duration: range.duration - trim)
+        try target.insertTimeRange(kept, of: source, at: CMTime(seconds: max(0, track.offset - head), preferredTimescale: 600))
         return target
     }
 
@@ -65,20 +68,22 @@ public enum Exporter {
         guard let screenTrack = take.track(.screen) else {
             throw CommandError(.invalidTake, "take has no screen track")
         }
+        // The export opens on the first moment every video track has a picture.
+        let head = take.tracks.filter { $0.kind != .mic }.map(\.offset).max() ?? 0
         let composition = AVMutableComposition()
-        guard let screen = try await insert(screenTrack, from: dir, media: .video, into: composition) else {
+        guard let screen = try await insert(screenTrack, head: head, from: dir, media: .video, into: composition) else {
             throw CommandError(.invalidTake, "missing screen.mov")
         }
         var camera: AVMutableCompositionTrack?
         if let track = take.track(.camera) {
-            camera = try await insert(track, from: dir, media: .video, into: composition)
+            camera = try await insert(track, head: head, from: dir, media: .video, into: composition)
         }
         if let track = take.track(.mic) {
-            _ = try await insert(track, from: dir, media: .audio, into: composition)
+            _ = try await insert(track, head: head, from: dir, media: .audio, into: composition)
         }
 
         let screenEnd = screen.timeRange.end.seconds
-        let duration = min(take.duration ?? screenEnd, composition.duration.seconds)
+        let duration = min((take.duration ?? screenEnd) - head, composition.duration.seconds)
         let exportRange = CMTimeRange(start: .zero, duration: CMTime(seconds: duration, preferredTimescale: 600))
 
         let renderer = FrameRenderer(layout: layout, focusX: focusX, drawsBorder: border)

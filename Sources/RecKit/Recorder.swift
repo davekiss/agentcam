@@ -117,6 +117,7 @@ public final class Recorder {
             pixelSize = CGSize(width: window.frame.width * scale, height: window.frame.height * scale)
         }
 
+        await camera?.waitUntilWarm()
         let clock = TakeClock(t0: TakeClock.hostNow())
         startedAt = Date()
         camera?.beginRecording(t0: clock.t0)

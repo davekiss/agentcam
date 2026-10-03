@@ -82,6 +82,9 @@ final class CameraRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let videoOutput = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
     private var t0: Double?
+    private var onWarm: (() -> Void)?
+    /// Recent luma readings, touched only on the video queue.
+    private var recentLuma: [Double] = []
     private let gate = NSLock()
 
     init(camera: URL?, mic: URL?) {
@@ -146,6 +149,31 @@ final class CameraRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.startRunning()
     }
 
+    /// Webcams deliver black frames while auto-exposure settles, so the take must not begin until
+    /// the picture is steady. The timeout keeps a dark room from blocking the take.
+    func waitUntilWarm(timeout: Double = 3) async {
+        guard video != nil else { return }
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            let once = OnceFlag()
+            let resume = { if once.claim() { done.resume() } }
+            gate.withLock { onWarm = resume }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if once.claim() {
+                    Output.log("camera still dark after \(timeout)s; starting anyway")
+                    done.resume()
+                }
+            }
+        }
+        gate.withLock { onWarm = nil }
+    }
+
+    /// Exposure ramps up over several frames; settled means a lit picture that has stopped changing.
+    private func exposureSettled(_ luma: Double) -> Bool {
+        recentLuma = Array((recentLuma + [luma]).suffix(6))
+        guard recentLuma.count == 6, let low = recentLuma.min(), let high = recentLuma.max() else { return false }
+        return low > 20 && high - low < 2
+    }
+
     /// Samples stamped before t0 are dropped so every track's offset is a true non-negative delay.
     func beginRecording(t0: Double) {
         gate.withLock { self.t0 = t0 }
@@ -157,7 +185,9 @@ final class CameraRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let t0 = gate.withLock({ t0 }) else { return }
+        let (t0, onWarm) = gate.withLock { (self.t0, self.onWarm) }
+        if let onWarm, output === videoOutput, exposureSettled(sample.meanLuma) { onWarm() }
+        guard let t0 else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         let host = CMSyncConvertTime(pts, from: session.synchronizationClock ?? CMClockGetHostTimeClock(), to: CMClockGetHostTimeClock())
         guard host.seconds >= t0 else { return }
@@ -166,5 +196,38 @@ final class CameraRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         } else if output === audioOutput {
             audio?.append(sample, hostTime: host)
         }
+    }
+}
+
+private final class OnceFlag: @unchecked Sendable {
+    private var claimed = false
+    private let lock = NSLock()
+    func claim() -> Bool {
+        lock.withLock {
+            defer { claimed = true }
+            return !claimed
+        }
+    }
+}
+
+private extension CMSampleBuffer {
+    /// Average of a sparse grid over the luma plane; video-range black reads 16.
+    var meanLuma: Double {
+        guard let pixels = CMSampleBufferGetImageBuffer(self) else { return 0 }
+        CVPixelBufferLockBaseAddress(pixels, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0) else { return 0 }
+        let width = CVPixelBufferGetWidthOfPlane(pixels, 0)
+        let height = CVPixelBufferGetHeightOfPlane(pixels, 0)
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        var total = 0, count = 0
+        for y in Swift.stride(from: 0, to: height, by: max(1, height / 32)) {
+            for x in Swift.stride(from: 0, to: width, by: max(1, width / 32)) {
+                total += Int(bytes[y * stride + x])
+                count += 1
+            }
+        }
+        return count == 0 ? 0 : Double(total) / Double(count)
     }
 }

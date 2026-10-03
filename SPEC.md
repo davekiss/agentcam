@@ -54,6 +54,8 @@ When `status` is `failed`, take.json also carries `"error": {"code", "message"}`
 
 The take clock starts at t0, the host time when the recorder begins writing. Each track's `offset` is the seconds between t0 and that track's first sample. Export uses offsets to line the tracks up. This is the only sync mechanism, and it is explicit so an agent can fix it by hand.
 
+With the camera on, t0 waits until the webcam's exposure has settled (a lit picture that has stopped changing, or 3s at most), so cam.mov never opens on the black frames a webcam produces while it warms up.
+
 ### timeline.json
 
 ```json
@@ -106,4 +108,4 @@ Layouts are data: a table of presets keyed by aspect, each giving the canvas siz
 
 The attention border is a rotating gradient ring around the camera circle. Its look at time t is a pure function: an intro from 0 to about 1.5s (the ring sweeps in, glows, and pulses once), then a calm thin ring for the rest of the video. `--no-border` turns it off.
 
-Mic audio is muxed into the export with its offset applied. Output is H.264 + AAC MP4.
+An export opens at the latest video track offset, the first moment both the screen and the camera have a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.

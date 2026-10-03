@@ -55,9 +55,8 @@ verify_take() {
 }
 
 verify_take full
-echo "== camera offset (cam.mov starts at 0.25s; 9:16 bubble center 540,1560 sits on the dark background)"
-check "no bubble at t=0.1" "$(awk -v l="$(patch_luma "$work/full/export-9x16.mp4" 0.1 540 1560)" 'BEGIN { print (l < 30) ? "dark" : "lit (" l ")" }')" dark
-check "bubble at t=0.5" "$(awk -v l="$(patch_luma "$work/full/export-9x16.mp4" 0.5 540 1560)" 'BEGIN { print (l >= 30) ? "lit" : "dark (" l ")" }')" lit
+echo "== head trim (cam.mov starts at 0.25s, so the export opens there; 9:16 bubble center 540,1560)"
+check "bubble lit on the first frame" "$(awk -v l="$(patch_luma "$work/full/export-9x16.mp4" 0 540 1560)" 'BEGIN { print (l >= 30) ? "lit" : "dark (" l ")" }')" lit
 verify_take no-cam-no-mic --no-cam --no-mic
 
 echo
