@@ -95,8 +95,8 @@ final class ModelTests: XCTestCase {
     }
 
     func testMarkerLinesSkipGarbage() {
-        let lines = MarkerLine.parse(jsonl: "{\"hostTime\":10.5,\"label\":\"a\"}\nnot json\n{\"hostTime\":12,\"label\":\"b\"}\n")
-        XCTAssertEqual(lines, [MarkerLine(hostTime: 10.5, label: "a"), MarkerLine(hostTime: 12, label: "b")])
+        let lines = MarkerLine.parse(jsonl: "{\"t\":10.5,\"label\":\"a\"}\nnot json\n{\"t\":12,\"label\":\"b\"}\n")
+        XCTAssertEqual(lines, [MarkerLine(t: 10.5, label: "a"), MarkerLine(t: 12, label: "b")])
     }
 
     func testTakeClockOffsets() {

@@ -12,6 +12,8 @@
 	<string>0.1.0</string>
 	<key>NSCameraUsageDescription</key>
 	<string>rec records your webcam alongside the screen.</string>
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>rec records your microphone alongside the screen.</string>
 </dict>

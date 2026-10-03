@@ -54,3 +54,15 @@ public enum Border {
 public func border(at t: Double) -> BorderAppearance {
     Border.appearance(at: t)
 }
+
+extension Border {
+    /// Conic gradient stops, shared by the preview ring and the export ring. The last equals the
+    /// first so the sweep has no seam.
+    public static let palette: [(r: Double, g: Double, b: Double)] = [
+        (1.00, 0.24, 0.50),
+        (1.00, 0.69, 0.24),
+        (0.24, 0.85, 1.00),
+        (0.54, 0.36, 1.00),
+        (1.00, 0.24, 0.50),
+    ]
+}

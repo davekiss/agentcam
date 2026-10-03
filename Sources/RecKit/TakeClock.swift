@@ -1,8 +1,8 @@
 import CoreMedia
 import Foundation
 
-/// The take clock: seconds since t0, where t0 is a host-clock time. The host clock is shared by
-/// every process on the machine, so `rec mark` in another process lands on the same clock.
+/// The take clock: seconds since t0, a host-clock time. Capture sample timestamps are host-clock
+/// times, so a track's offset is its first sample minus t0.
 public struct TakeClock: Equatable, Sendable {
     public let t0: Double
 

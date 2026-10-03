@@ -98,15 +98,13 @@ public struct Timeline: Codable, Equatable, Sendable {
     }
 }
 
-/// One line of markers.jsonl, appended by `rec mark` while recording.
-/// It stores host-clock seconds because the host clock is shared across processes,
-/// so the recorder can place the marker on the take clock exactly at merge time.
+/// One line of markers.jsonl, appended by `rec mark` while recording. `t` is on the take clock.
 public struct MarkerLine: Codable, Equatable, Sendable {
-    public var hostTime: Double
+    public var t: Double
     public var label: String
 
-    public init(hostTime: Double, label: String) {
-        self.hostTime = hostTime
+    public init(t: Double, label: String) {
+        self.t = t
         self.label = label
     }
 
