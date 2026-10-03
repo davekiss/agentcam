@@ -113,17 +113,17 @@ final class PreviewPanel {
 
     /// Alpha speckle matching the export's ink grain: mostly solid with pinhole voids.
     private static func grainImage(side: Int) -> CGImage? {
-        var alpha = [UInt8](repeating: 0, count: side * side)
         var seed: UInt64 = 0x9e37_79b9_7f4a_7c15
-        for i in alpha.indices {
-            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            alpha[i] = (seed >> 56) < 40 ? 0 : 255
-        }
-        guard let provider = CGDataProvider(data: Data(alpha) as CFData) else { return nil }
-        return CGImage(
-            width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: side,
-            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.alphaOnly.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        let context = CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         )
+        guard let context, let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        for i in 0..<(side * side) {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            let value: UInt8 = (seed >> 56) < 40 ? 0 : 255
+            for c in 0..<4 { data[i * 4 + c] = value }
+        }
+        return context.makeImage()
     }
 }
