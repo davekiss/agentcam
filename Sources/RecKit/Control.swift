@@ -23,7 +23,6 @@ public struct MarkResult: Encodable {
     public var label: String
 }
 
-/// The commands that talk to a background recorder through active.json and the take folder.
 public enum Control {
     public static var defaultRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/rec")
@@ -53,7 +52,6 @@ public enum Control {
         if options.mic { try await CameraRecorder.ensurePermission(for: .audio) }
     }
 
-    /// Spawns `rec record` detached and returns once its take.json says recording.
     public static func start(executable: String, recordArguments: [String], takeDir: URL, timeout: Double = 20) throws -> StartResult {
         try FileManager.default.createDirectory(at: takeDir, withIntermediateDirectories: true)
         let log = takeDir.appendingPathComponent(TakeFile.log)

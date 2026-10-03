@@ -1,10 +1,8 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreImage
 import CoreVideo
 import Foundation
 
-/// Draws one export frame from a Layout. Pure with respect to its inputs: the same source frames
-/// and time always give the same picture.
 final class FrameRenderer {
     static let background = CIColor(red: 0.055, green: 0.059, blue: 0.075)
 

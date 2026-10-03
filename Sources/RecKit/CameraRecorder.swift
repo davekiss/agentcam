@@ -1,9 +1,8 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
 
-/// Writes the mic to an AAC .m4a. All calls happen on `queue`.
-final class AudioTrackWriter {
+final class AudioTrackWriter: @unchecked Sendable {
     let url: URL
     let queue = DispatchQueue(label: "rec.writer.mic")
     private var writer: AVAssetWriter?
@@ -107,7 +106,6 @@ final class CameraRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         )
     }
 
-    /// Configures the devices. Samples are dropped until `beginRecording(t0:)`.
     func configure() throws {
         session.beginConfiguration()
         defer { session.commitConfiguration() }

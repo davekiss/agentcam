@@ -1,7 +1,7 @@
 import AppKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 public struct RecordOptions: Sendable {
     public var selector: SourceSelector

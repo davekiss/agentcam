@@ -1,5 +1,5 @@
 import AppKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import QuartzCore
 
 /// The floating circular webcam bubble the presenter sees while recording. It is excluded from

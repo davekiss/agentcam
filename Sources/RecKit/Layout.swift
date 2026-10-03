@@ -10,7 +10,6 @@ public enum Aspect: String, CaseIterable, Codable, Sendable {
     }
 }
 
-/// How the screen recording occupies its region of the canvas.
 public enum ScreenPlacement: Equatable, Sendable {
     /// Scale the whole screen to fit inside the region, letterboxed on the background.
     case fit(CGRect, cornerRadius: CGFloat)
@@ -96,7 +95,6 @@ public struct Layout: Equatable, Sendable {
         }
     }
 
-    /// Centered aspect-fill crop of the camera frame to the slot's aspect.
     public func cameraCrop(source: CGSize) -> CGRect {
         let slotAspect = camera.rect.width / camera.rect.height
         if source.width / source.height > slotAspect {

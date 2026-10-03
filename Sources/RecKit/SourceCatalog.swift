@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 public enum SourceSelector: Equatable, Sendable {
     case mainDisplay
@@ -10,7 +10,6 @@ public enum SourceSelector: Equatable, Sendable {
     case app(String)
 }
 
-/// A capture target resolved against live ScreenCaptureKit content.
 public enum ResolvedSource {
     case display(SCDisplay, Source)
     case window(SCWindow, Source)

@@ -1,11 +1,11 @@
-import AVFoundation
-import CoreMedia
+@preconcurrency import AVFoundation
+@preconcurrency import CoreMedia
 import Foundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 /// Writes one H.264 track from timestamped sample buffers. Shared by the screen and camera tracks.
 /// All calls happen on `queue`.
-final class VideoTrackWriter {
+final class VideoTrackWriter: @unchecked Sendable {
     let url: URL
     let queue: DispatchQueue
     private var writer: AVAssetWriter?
@@ -72,12 +72,11 @@ final class VideoTrackWriter {
     /// Repeats the last frame at `endHostTime` so a static screen still fills the whole take,
     /// then finalizes the file. Returns false when nothing was ever written.
     func finish(endHostTime: CMTime) async -> Bool {
-        let (writer, input, last): (AVAssetWriter?, AVAssetWriterInput?, CMSampleBuffer?) = queue.sync {
-            (self.writer, self.input, self.lastSample)
-        }
+        let (writer, input): (AVAssetWriter?, AVAssetWriterInput?) = queue.sync { (self.writer, self.input) }
         guard let writer, let input else { return false }
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             queue.async {
+                let last = self.lastSample
                 if let last, endHostTime > CMSampleBufferGetPresentationTimeStamp(last),
                    input.isReadyForMoreMediaData, let tail = last.retimed(to: endHostTime) {
                     input.append(tail)
@@ -104,7 +103,6 @@ extension CMSampleBuffer {
     }
 }
 
-/// Captures a display or window with ScreenCaptureKit into screen.mov.
 final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let writer: VideoTrackWriter
     private var stream: SCStream?
