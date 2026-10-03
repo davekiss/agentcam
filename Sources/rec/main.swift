@@ -7,7 +7,7 @@ struct Rec: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "rec",
         abstract: "Agent-first screen recorder. Every command prints one JSON object to stdout.",
-        subcommands: [Sources.self, Start.self, Stop.self, Status.self, Mark.self, Record.self]
+        subcommands: [Sources.self, Start.self, Stop.self, Status.self, Mark.self, Record.self, Export.self]
     )
 }
 
@@ -120,6 +120,20 @@ struct Record: ParsableCommand {
             Task { await recorder.run() }
             app.run()
         }
+    }
+}
+
+extension Aspect: ExpressibleByArgument {}
+
+struct Export: ParsableCommand, AsyncCommand {
+    static let configuration = CommandConfiguration(abstract: "Compose a take into 16:9 and/or 9:16 MP4s.")
+    @Argument(help: "Path to the take folder.") var take: String
+    @Option(help: "16:9 or 9:16; repeat for both (default both).") var layout: [Aspect] = []
+    @Flag(help: "Do not draw the attention border.") var noBorder = false
+
+    func execute() async throws {
+        let aspects = layout.isEmpty ? Aspect.allCases : Aspect.allCases.filter(layout.contains)
+        Output.emit(try await Exporter.export(take: URL(fileURLWithPath: take), aspects: aspects, border: !noBorder))
     }
 }
 
