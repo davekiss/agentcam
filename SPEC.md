@@ -50,6 +50,8 @@ Later: blur of sensitive regions, auto-zoom on clicks, transcription and summary
 }
 ```
 
+When `status` is `failed`, take.json also carries `"error": {"code", "message"}`.
+
 The take clock starts at t0, the host time when the recorder begins writing. Each track's `offset` is the seconds between t0 and that track's first sample. Export uses offsets to line the tracks up. This is the only sync mechanism, and it is explicit so an agent can fix it by hand.
 
 ### timeline.json
@@ -78,6 +80,14 @@ All output is a single JSON object on stdout. Human-readable progress goes to st
 - `rec mark <label>` adds a marker at the current moment of the active take.
 - `rec record --duration <seconds> [same flags as start]` records in the foreground until the duration ends or SIGINT. `rec start` spawns this same command detached, so there is one recording code path.
 - `rec export <take> [--layout 16:9] [--layout 9:16] [--no-border]` composes the take and prints the output paths. With no `--layout`, it exports both.
+
+Output shapes not shown above:
+
+- `rec sources`: `{"displays": [<source>], "windows": [<source>]}`, where each entry has the same fields as take.json's `source`.
+- `rec mark`: `{"take", "t", "label"}`. Each line of markers.jsonl is `{"t", "label"}` with `t` on the take clock.
+- `rec export`: `{"take", "exports": [{"layout", "path", "width", "height", "duration"}]}`.
+
+`--out` names the parent folder for the take (default `~/Movies/rec`). If two takes start in the same second, the second folder gets a `-2` suffix.
 
 Commands are idempotent where it matters. `start` while recording returns an error naming the active take. `stop` with nothing recording returns `{"recording": false}`. A stale active record (pid no longer alive) gets cleaned up silently.
 
