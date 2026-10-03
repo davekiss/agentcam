@@ -106,6 +106,6 @@ Layouts are data: a table of presets keyed by aspect, each giving the canvas siz
 - `16:9` is 1920x1080. The screen is fit inside with a small margin on a dark background, and the camera is a circle in the bottom-right corner.
 - `9:16` is 1080x1920. The screen sits in the top portion, cropped to fill a 1080-wide region, centered on the cursor's average position if there is timeline data. The camera is a large circle in the lower portion.
 
-The attention border is a rotating gradient ring around the camera circle. Its look at time t is a pure function: an intro from 0 to about 1.5s (the ring sweeps in, glows, and pulses once), then a calm thin ring for the rest of the video. `--no-border` turns it off.
+The attention border is a risograph ring around the camera circle: one grainy ring per spot ink (fluorescent pink, riso blue, yellow), each on its own plate, multiplied where they overlap. Its look at time t is a pure function. In the intro, from 0 to about 1.5s, the plates start far out of register, snap into place by 0.75s, and kick apart once on the beat. After that, a thin ring stays slightly misregistered and boils, wobbling at 10 fps. `--no-border` turns it off.
 
 An export opens at the latest video track offset, the first moment both the screen and the camera have a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.

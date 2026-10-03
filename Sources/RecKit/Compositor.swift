@@ -32,8 +32,8 @@ final class FrameRenderer {
         }
         if let camera {
             image = composite(camera: CIImage(cvPixelBuffer: camera), over: image)
-            if drawsBorder, let ring = ring(at: time) {
-                image = ring.composited(over: image)
+            if drawsBorder {
+                image = ring(at: time, over: image)
             }
         }
         context.render(image.cropped(to: canvas), to: output, bounds: canvas, colorSpace: colorSpace)
@@ -85,41 +85,64 @@ final class FrameRenderer {
         ])
     }
 
-    /// The attention ring: a rotating conic gradient annulus hugging the outside of the camera
-    /// circle, with a blurred copy underneath for glow.
-    private func ring(at time: Double) -> CIImage? {
+    /// The risograph attention ring: one grainy annulus per spot ink, each on its own
+    /// misregistered plate, multiplied together the way overprinted inks mix.
+    private func ring(at time: Double, over image: CIImage) -> CIImage {
         let b = border(at: time)
-        guard b.opacity > 0.001 else { return nil }
+        guard b.opacity > 0.001 else { return image }
         let slot = flip(layout.camera.rect, height: layout.canvas.height)
-        let center = CGPoint(x: slot.midX, y: slot.midY)
-        let inner = slot.width / 2
-        let outer = inner + CGFloat(b.width) * slot.width
+        let diameter = slot.width
+        let inner = diameter / 2
+        let outer = inner + CGFloat(b.width) * diameter
+        let reach = outer + CGFloat(b.spread + Border.boilJitter) * diameter + 2
+        let bounds = CGRect(x: slot.midX - reach, y: slot.midY - reach, width: reach * 2, height: reach * 2)
 
-        let rotate = CGAffineTransform(translationX: -conic.extent.midX, y: -conic.extent.midY)
-            .concatenating(CGAffineTransform(rotationAngle: CGFloat(b.rotation)))
-            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
-        let gradient = conic.transformed(by: rotate)
-
-        let outsideInner = radial(center, from: inner - 0.75, to: inner + 0.75, inside: .clear, outside: .white)
-        let insideOuter = radial(center, from: outer - 0.75, to: outer + 0.75, inside: .white, outside: .clear)
-        let mask = insideOuter.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: outsideInner])
-        let bounds = CGRect(x: center.x - outer - 2, y: center.y - outer - 2, width: (outer + 2) * 2, height: (outer + 2) * 2)
-        var ring = gradient
-            .applyingFilter("CIBlendWithMask", parameters: [
-                kCIInputBackgroundImageKey: CIImage.empty(),
+        var inks = CIImage(color: .white).cropped(to: bounds)
+        var coverage = CIImage(color: .black).cropped(to: bounds)
+        for (index, ink) in Border.inks.enumerated() {
+            let offset = Border.plateOffset(index, b)
+            let center = CGPoint(x: slot.midX + CGFloat(offset.dx) * diameter, y: slot.midY + CGFloat(offset.dy) * diameter)
+            let annulus = radial(center, from: outer - 0.75, to: outer + 0.75, inside: .white, outside: .black)
+                .applyingFilter("CIMultiplyCompositing", parameters: [
+                    kCIInputBackgroundImageKey: radial(center, from: inner - 0.75, to: inner + 0.75, inside: .black, outside: .white),
+                ])
+            let mask = annulus
+                .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: grain(plate: index, frame: b.boilFrame)])
+                .cropped(to: bounds)
+            let plate = CIImage(color: CIColor(red: ink.r, green: ink.g, blue: ink.b)).applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: CIImage(color: .white),
                 kCIInputMaskImageKey: mask,
             ])
-            .cropped(to: bounds)
-            .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(b.opacity))])
-
-        let glowRadius = CGFloat(b.glow) * slot.width * 0.06
-        if glowRadius > 0.5 {
-            let glow = ring
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: glowRadius])
-                .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(min(1, b.glow * 1.8)))])
-            ring = ring.composited(over: glow)
+            inks = plate.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: inks]).cropped(to: bounds)
+            coverage = mask.applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: coverage]).cropped(to: bounds)
         }
-        return ring
+        let fade = CGFloat(b.opacity)
+        let alpha = coverage.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: fade, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: fade, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: fade, w: 0),
+        ])
+        return inks.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: image,
+            kCIInputMaskImageKey: alpha,
+        ])
+    }
+
+    /// Speckled ink coverage: mostly solid with pinhole voids, reshuffled on every boil step.
+    private func grain(plate: Int, frame: Int) -> CIImage {
+        let gain: CGFloat = 5
+        let bias: CGFloat = -0.4 * gain + 0.4
+        return CIFilter(name: "CIRandomGenerator")!.outputImage!
+            .transformed(by: CGAffineTransform(translationX: CGFloat(frame * 97 + plate * 211), y: CGFloat(frame * 31 + plate * 157)))
+            .transformed(by: CGAffineTransform(scaleX: 1.6, y: 1.6))
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 1),
+            ])
+            .applyingFilter("CIColorClamp")
     }
 
     private func radial(_ center: CGPoint, from r0: CGFloat, to r1: CGFloat, inside: CIColor, outside: CIColor) -> CIImage {
@@ -131,37 +154,6 @@ final class FrameRenderer {
             "inputColor1": outside,
         ])!.outputImage!
     }
-
-    /// A square conic gradient of the ring palette, built once per export and rotated per frame.
-    /// Core Graphics has no conic gradient in its Swift API and Core Image has no conic generator.
-    private lazy var conic: CIImage = {
-        let side = Int(ceil(layout.camera.rect.width * 1.5))
-        var pixels = [UInt8](repeating: 0, count: side * side * 4)
-        let stops = Border.palette
-        let segments = Double(stops.count - 1)
-        let c = Double(side) / 2
-        for y in 0..<side {
-            for x in 0..<side {
-                let angle = atan2(Double(y) + 0.5 - c, Double(x) + 0.5 - c)
-                let u = (angle + .pi) / (2 * .pi) * segments
-                let i = min(Int(u), stops.count - 2)
-                let f = u - Double(i)
-                let a = stops[i], z = stops[i + 1]
-                let o = (y * side + x) * 4
-                pixels[o] = UInt8(((a.r + (z.r - a.r) * f) * 255).rounded())
-                pixels[o + 1] = UInt8(((a.g + (z.g - a.g) * f) * 255).rounded())
-                pixels[o + 2] = UInt8(((a.b + (z.b - a.b) * f) * 255).rounded())
-                pixels[o + 3] = 255
-            }
-        }
-        return CIImage(
-            bitmapData: Data(pixels),
-            bytesPerRow: side * 4,
-            size: CGSize(width: side, height: side),
-            format: .RGBA8,
-            colorSpace: colorSpace
-        )
-    }()
 }
 
 final class LayoutInstruction: NSObject, AVVideoCompositionInstructionProtocol {

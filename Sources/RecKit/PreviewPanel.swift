@@ -10,8 +10,8 @@ final class PreviewPanel {
     private let margin: CGFloat = 40
     private let panel: NSPanel
     private let ringContainer = CALayer()
-    private let gradient = CAGradientLayer()
-    private let ringMask = CAShapeLayer()
+    private let plates: [CAShapeLayer] = Border.inks.map { _ in CAShapeLayer() }
+    private let grain = CALayer()
     private var animation: Timer?
 
     var windowID: CGWindowID { CGWindowID(panel.windowNumber) }
@@ -53,19 +53,19 @@ final class PreviewPanel {
         root.addSublayer(video)
 
         ringContainer.frame = root.bounds
-        ringContainer.shadowColor = NSColor.white.cgColor
-        ringContainer.shadowOffset = .zero
         ringContainer.opacity = 0
-        gradient.type = .conic
-        gradient.frame = root.bounds
-        gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
-        gradient.endPoint = CGPoint(x: 0.5, y: 0)
-        gradient.colors = Border.palette.map { CGColor(red: $0.r, green: $0.g, blue: $0.b, alpha: 1) }
-        ringMask.frame = root.bounds
-        ringMask.fillColor = nil
-        ringMask.strokeColor = NSColor.black.cgColor
-        gradient.mask = ringMask
-        ringContainer.addSublayer(gradient)
+        for (plate, ink) in zip(plates, Border.inks) {
+            plate.frame = root.bounds
+            plate.fillColor = nil
+            plate.strokeColor = CGColor(red: ink.r, green: ink.g, blue: ink.b, alpha: 1)
+            plate.compositingFilter = "multiplyBlendMode"
+            ringContainer.addSublayer(plate)
+        }
+        // Oversized so it can shift per boil step and still cover the ring.
+        grain.frame = root.bounds.insetBy(dx: -24, dy: -24)
+        grain.contents = Self.grainImage(side: Int(grain.frame.width))
+        grain.magnificationFilter = .nearest
+        ringContainer.mask = grain
         root.addSublayer(ringContainer)
     }
 
@@ -99,13 +99,31 @@ final class PreviewPanel {
         CATransaction.setDisableActions(true)
         let width = CGFloat(b.width) * diameter
         let radius = diameter / 2 + width / 2
-        let center = CGPoint(x: ringMask.bounds.midX, y: ringMask.bounds.midY)
-        ringMask.path = CGPath(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2), transform: nil)
-        ringMask.lineWidth = width
-        gradient.setAffineTransform(CGAffineTransform(rotationAngle: CGFloat(b.rotation)))
+        for (index, plate) in plates.enumerated() {
+            let offset = Border.plateOffset(index, b)
+            let center = CGPoint(x: plate.bounds.midX + CGFloat(offset.dx) * diameter, y: plate.bounds.midY + CGFloat(offset.dy) * diameter)
+            plate.path = CGPath(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2), transform: nil)
+            plate.lineWidth = width
+        }
+        let jitter = CGFloat(Border.noise(b.boilFrame, salt: 99) * 20)
+        grain.frame.origin = CGPoint(x: -24 + jitter, y: -24 - jitter)
         ringContainer.opacity = Float(b.opacity * fade)
-        ringContainer.shadowOpacity = Float(b.glow)
-        ringContainer.shadowRadius = CGFloat(b.glow) * 16
         CATransaction.commit()
+    }
+
+    /// Alpha speckle matching the export's ink grain: mostly solid with pinhole voids.
+    private static func grainImage(side: Int) -> CGImage? {
+        var alpha = [UInt8](repeating: 0, count: side * side)
+        var seed: UInt64 = 0x9e37_79b9_7f4a_7c15
+        for i in alpha.indices {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            alpha[i] = (seed >> 56) < 40 ? 0 : 255
+        }
+        guard let provider = CGDataProvider(data: Data(alpha) as CFData) else { return nil }
+        return CGImage(
+            width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: side,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.alphaOnly.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        )
     }
 }
