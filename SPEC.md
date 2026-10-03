@@ -1,111 +1,196 @@
 # rec
 
-An agent-first screen recorder for macOS. Built for demos and devrel. An agent (or a person) drives it from the command line, and every command prints one JSON object to stdout so another program can read the result.
+A screen recorder for agents. Its main user is an agent running in a headless Linux microVM (Vercel Sandbox, E2B, Modal, Daytona, Fly) that needs to make a video of what it built: a TUI, a Claude Code mod, a CLI demo, or a desktop app. A person on a Mac is the second user. Every command prints one JSON object to stdout so the calling program can read the result.
 
-The core idea is that recording and composing are separate. `rec` records the raw pieces of a take (screen, webcam, mic, and what happened on screen as data). Layouts (16:9, 9:16), the webcam bubble, and its attention-grabbing border are applied when you export. One recording gives every aspect ratio, and an agent can edit from the data instead of the pixels.
+Two ideas hold the design together:
 
-## Scope of the first slice
+1. **Recording and composing are separate.** `rec` records the raw pieces of a take: the screen or terminal stream, optional camera and mic, and what happened as data. Layouts (16:9, 9:16), theming, and the attention border are applied at export. One recording gives every aspect ratio, and an agent can edit from the data instead of the pixels.
+2. **In a microVM, `rec` owns the environment it records.** A Firecracker VM has no display, GPU, camera, or sound device. `rec` creates the terminal or virtual display, runs the program inside it, and drives it with input, so the agent can launch, type, wait, and film without any desktop.
 
-In: the capture sources, start/stop/status/mark, the take folder, the floating webcam preview that stays out of the capture, and export to 16:9 and 9:16 with an animated border.
+Status: the macOS backend (ScreenCaptureKit, camera, mic, preview panel, CoreImage export) is implemented in Swift. Everything marked *Linux* below is planned.
 
-Later: blur of sensitive regions, auto-zoom on clicks, transcription and summary, Mux upload, a Claude Code mod.
+## Verified on Vercel Sandbox (2026-10-03)
+
+Probed on the default image: Ubuntu 26.04, kernel 6.18, 4 vCPU, 8 GB, non-root `ubuntu` user with sudo.
+
+- No `/dev/dri` and no `/dev/snd`. `/dev/pts` is present, and `script`, `tmux`, `claude`, and `codex` come preinstalled.
+- `apt-get install xvfb ffmpeg xdotool mesa` took 34s. `ghostty` 1.3 is in the Ubuntu archive and took 7s more.
+- Ghostty runs on Xvfb using Mesa llvmpipe (OpenGL 4.5, software). A 10s `ffmpeg -f x11grab` capture at 1920x1080 and 30 fps kept 299 of 300 frames. During the capture Ghostty used about 90% of one core, ffmpeg (x264 ultrafast) about 70%, and Xvfb about 20%. xdotool typing into Ghostty works.
+- `script --log-io --log-timing` captures a PTY session with timing and no display: 1.4 KB for a one-second session. tmux runs htop headless.
+
+So the pixel route works but costs about two cores, and the terminal route is nearly free. Dependency install time (around 40s per boot) is the biggest cost an agent pays, which is why install is a requirement below.
+
+## Sources
+
+A take records exactly one primary source.
+
+| kind | where | how it is captured |
+|---|---|---|
+| `tty` | Linux, macOS | `rec` spawns the command in a PTY it owns and records the output byte stream with timestamps. No display needed. Rendered to pixels at export. |
+| `x11` | Linux | `rec` starts Xvfb at a given size, the agent (or `rec`) launches apps into it, and it is captured with x11grab. Covers GUI apps and real terminal emulators like Ghostty. |
+| `display`, `window` | macOS | ScreenCaptureKit. Implemented. |
+
+Terminal programs should use `tty`. It is lossless, re-renders at any size and theme, and costs almost nothing during capture. Use `x11` only when the window chrome or a GUI is the point.
+
+Camera and mic are optional tracks, available only where the devices exist (macOS today). Wayland desktops (xdg-desktop-portal ScreenCast over PipeWire) are out of scope until someone needs them.
+
+## Input
+
+In a microVM, nobody else can type. `rec` sends input to the source it owns, and logs every input it sends into the timeline with an exact timestamp. Those logged events feed click highlights, typing effects, and later auto-zoom. This replaces macOS input monitoring for these sources.
+
+- `tty` input is written to the PTY.
+- `x11` input goes through XTEST (what xdotool uses).
+- On macOS sources, `rec` only observes the cursor and clicks, as it does today.
 
 ## Take folder
 
 ```
-~/Movies/rec/take-20261002-213501/
+<out>/take-20261002-213501/
   take.json        manifest (written at start, finalized at stop)
-  screen.mov       H.264, the captured display or window, no audio
-  cam.mov          H.264, webcam only, no audio          (absent with --no-cam)
-  mic.m4a          AAC, microphone                        (absent with --no-mic)
-  timeline.json    events on the take clock               (written at stop)
+  term.cast        tty only: asciicast v2 output stream
+  screen.mp4       x11 / macOS: H.264, no audio        (screen.mov on macOS)
+  cam.mov          H.264 webcam                         (macOS, absent with --no-cam)
+  mic.m4a          AAC microphone                       (macOS, absent with --no-mic)
+  timeline.json    events on the take clock             (written at stop)
   markers.jsonl    appended to by `rec mark` while recording; merged into timeline.json at stop
   recorder.log     stderr of the background recorder
   export-16x9.mp4  written by `rec export`
   export-9x16.mp4
 ```
 
+The default `<out>` is `~/Movies/rec` on macOS and `$XDG_DATA_HOME/rec` (falling back to `~/.local/share/rec`) on Linux.
+
+`term.cast` uses asciicast v2 (a JSON header line, then `[t, "o", data]` lines) so existing players and `agg` can read it. Only output (`"o"`) events go in the cast. Input lives in timeline.json.
+
 ### take.json
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "id": "take-20261002-213501",
   "createdAt": "2026-10-02T21:35:01Z",
   "status": "recording | finished | failed",
   "duration": 42.7,
   "source": {
-    "kind": "display | window",
-    "id": 1,
-    "title": "Built-in Retina Display | <window title>",
-    "app": "Google Chrome",
-    "frame": { "x": 0, "y": 0, "width": 1512, "height": 982 },
-    "scale": 2
+    "kind": "tty | x11 | display | window",
+    "command": ["herdr"],
+    "size": { "cols": 120, "rows": 36 },
+    "frame": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
+    "title": "...",
+    "app": "...",
+    "scale": 1
   },
   "tracks": [
-    { "kind": "screen", "file": "screen.mov", "offset": 0.0,  "width": 3024, "height": 1964 },
+    { "kind": "term",   "file": "term.cast",  "offset": 0.0 },
+    { "kind": "screen", "file": "screen.mp4", "offset": 0.0,  "width": 1920, "height": 1080 },
     { "kind": "camera", "file": "cam.mov",    "offset": 0.12, "width": 1920, "height": 1080 },
     { "kind": "mic",    "file": "mic.m4a",    "offset": 0.03 }
   ]
 }
 ```
 
-When `status` is `failed`, take.json also carries `"error": {"code", "message"}`.
+Which `source` fields are present depends on the kind: `command` and `size` for `tty`; `command` (if `rec` launched one) and `frame` for `x11`; `id`, `title`, `app`, `frame`, and `scale` for macOS. When `status` is `failed`, take.json also carries `"error": {"code", "message"}`. Version 1 takes (macOS, before this change) stay readable.
 
-The take clock starts at t0, the host time when the recorder begins writing. Each track's `offset` is the seconds between t0 and that track's first sample. Export uses offsets to line the tracks up. This is the only sync mechanism, and it is explicit so an agent can fix it by hand.
+The take clock starts at t0, the moment the recorder begins writing. Each track's `offset` is the seconds between t0 and that track's first sample. Export lines tracks up using only these offsets, so an agent can fix sync by editing them.
 
-With the camera on, t0 waits until the webcam's exposure has settled (a lit picture that has stopped changing, or 3s at most), so cam.mov never opens on the black frames a webcam produces while it warms up.
+With the camera on, t0 waits until the webcam's exposure has settled (a lit picture that has stopped changing, or 3s at most), so cam.mov never opens on black warm-up frames.
 
 ### timeline.json
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "events": [
     { "t": 0.033, "type": "cursor", "x": 0.412, "y": 0.230 },
     { "t": 1.200, "type": "click",  "x": 0.415, "y": 0.231, "button": "left" },
+    { "t": 2.000, "type": "type",   "text": "ls -la" },
+    { "t": 2.400, "type": "key",    "key": "Return" },
+    { "t": 2.900, "type": "type",   "text": null, "redacted": true },
     { "t": 3.900, "type": "marker", "label": "ran tests" }
   ]
 }
 ```
 
-`t` is seconds on the take clock. `x` and `y` are normalized 0..1 relative to the captured source's frame, top-left origin, so they survive any crop or resolution. Cursor is sampled at 30 Hz and only written when it moves. Keystrokes are deliberately not recorded.
+`t` is seconds on the take clock. `x` and `y` are normalized 0..1 relative to the source's frame, top-left origin, so they survive any crop or resolution. For `tty` they are cell-center coordinates normalized to the grid. Cursor is sampled at 30 Hz and written only when it moves.
+
+`type` and `key` events record only input that `rec` itself sent. Keystrokes a human types on macOS are never recorded. `rec type --secret` still sends the text but logs it as redacted.
 
 ## Commands
 
 All output is a single JSON object on stdout. Human-readable progress goes to stderr. Failures print `{"error": {"code": "...", "message": "..."}}` and exit nonzero.
 
-- `rec sources` lists displays and shareable on-screen windows with their ids, app names, titles, and frames.
-- `rec start [--display <id> | --window <id> | --app <name>] [--no-cam] [--no-mic] [--no-preview] [--out <dir>]` starts a background recorder and returns once it is actually recording: `{"take": "<path>", "pid": 1234}`. The default source is the main display. `--app` picks that app's frontmost window.
-- `rec stop` stops the active recorder, waits for the files to finalize, and prints the finished take.json.
-- `rec status` prints `{"recording": true, "take": "...", "elapsed": 12.3}` or `{"recording": false}`.
-- `rec mark <label>` adds a marker at the current moment of the active take.
-- `rec record --duration <seconds> [same flags as start]` records in the foreground until the duration ends or SIGINT. `rec start` spawns this same command detached, so there is one recording code path.
-- `rec export <take> [--layout 16:9] [--layout 9:16] [--no-border]` composes the take and prints the output paths. With no `--layout`, it exports both.
+### Recording
 
-Output shapes not shown above:
+- `rec start --tty [--size 120x36] -- <cmd...>` spawns `<cmd>` in a PTY under a background recorder and returns once it is recording: `{"take", "pid"}`. The take finishes when `rec stop` runs or the command exits.
+- `rec start --x11 [--size 1920x1080] [-- <cmd...>]` starts Xvfb and the recorder, optionally launches `<cmd>` with `DISPLAY` set, and returns `{"take", "pid", "display": ":99"}` so the agent can launch more apps into it.
+- `rec start [--display <id> | --window <id> | --app <name>] [--no-cam] [--no-mic] [--no-preview]` is the macOS form. It is implemented, and the default source there is the main display.
+- All `start` forms accept `--out <dir>`.
+- `rec record --duration <seconds> [same flags as start]` records in the foreground until the duration ends, the command exits, or SIGINT. `rec start` spawns this same command detached, so there is one recording code path.
+- `rec stop` stops the active recorder, waits for files to finalize, tears down anything `rec` started (PTY child, Xvfb), and prints the finished take.json.
+- `rec status` prints `{"recording": true, "take", "elapsed", "source"}` or `{"recording": false}`.
+- `rec mark <label>` adds a marker at the current moment: `{"take", "t", "label"}`. Each line of markers.jsonl is `{"t", "label"}`.
 
-- `rec sources`: `{"displays": [<source>], "windows": [<source>]}`, where each entry has the same fields as take.json's `source`.
-- `rec mark`: `{"take", "t", "label"}`. Each line of markers.jsonl is `{"t", "label"}` with `t` on the take clock.
-- `rec export`: `{"take", "exports": [{"layout", "path", "width", "height", "duration"}]}`.
+### Driving and observing (tty, x11)
 
-`--out` names the parent folder for the take (default `~/Movies/rec`). If two takes start in the same second, the second folder gets a `-2` suffix.
+- `rec type <text> [--delay <ms>] [--secret]` types text at a human-looking pace (default 40 ms per character).
+- `rec key <combo>` sends a key or chord, such as `Return`, `ctrl+c`, or `alt+tab`.
+- `rec click <x> <y> [--button left]` and `rec move <x> <y>` work on `x11` only. Coordinates are pixels of the source frame.
+- `rec wait --text <regex> [--timeout <s>]` blocks until the current screen matches the pattern, so agents wait on output instead of sleeping. It prints `{"matched": true, "t"}`, or exits with error `timeout`. On `tty` it matches the emulated screen. On `x11` it needs OCR and comes later.
+- `rec screen [--png <path>]` prints what is on screen now: `{"text", "cols", "rows", "cursor"}` for `tty`, or writes a PNG and prints `{"png"}`. This is how the agent checks its work mid-take.
 
-Commands are idempotent where it matters. `start` while recording returns an error naming the active take. `stop` with nothing recording returns `{"recording": false}`. A stale active record (pid no longer alive) gets cleaned up silently.
+Each driving command records itself in the timeline and returns `{"t"}` on the take clock.
 
-Active state lives in `~/Library/Application Support/rec/active.json`: `{"pid", "take", "startedAt"}`.
+### Composing and delivering
 
-## Live preview
+- `rec export <take> [--layout 16:9] [--layout 9:16] [--no-border] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "path", "width", "height", "duration", "url"?}]}`. With no `--layout`, it exports both. `url` is present only with `--upload`.
+- `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`.
+- `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first.
 
-While recording with the camera on, a borderless floating circular panel shows the webcam in the bottom-right corner of the screen. It is draggable. It is excluded from the screen capture. The recording does not contain it, because the bubble in the final video is drawn at export. The panel plays the attention border once at the start, so the presenter sees the moment the take begins.
+The VM, and the take folder with it, is gone when the session ends, so delivery is part of export. Upload targets (an S3-compatible URL, Vercel Blob, Mux) are taken from flags or the environment. The first target is still to be chosen.
+
+### Behavior shared by all commands
+
+If two takes start in the same second, the second folder gets a `-2` suffix.
+
+Commands are idempotent where it matters. `start` while recording returns an error naming the active take. `stop` with nothing recording returns `{"recording": false}`. A stale active record (pid no longer alive) is cleaned up silently, along with any Xvfb it left behind.
+
+Active state lives in `active.json`, holding `{"pid", "take", "startedAt", "source", "display"?}`. It is in `~/Library/Application Support/rec/` on macOS and `$XDG_STATE_HOME/rec/` (falling back to `~/.local/state/rec/`) on Linux.
+
+## Install
+
+On Linux, `rec` ships as a single static binary (musl) that runs as a non-root user and installs with one `curl | sh` into `~/.local/bin`. Everything a `tty` take needs, from capture through export, must work with no package installs. The `x11` source may require Xvfb, which `rec doctor` reports, and installs when given `--fix` and sudo is available.
+
+Encoding: export pipes raw RGBA frames into an encoder. v1 requires an `ffmpeg` on `PATH` and `rec doctor --fix` fetches a static build. Linking an H.264 encoder into the binary is the follow-up that removes that step.
+
+## Live preview (macOS)
+
+While recording with the camera on, a borderless floating circular panel shows the webcam in the bottom-right corner of the screen. It is draggable and is excluded from the screen capture; the bubble in the final video is drawn at export. The panel plays the attention border once at the start, so the presenter sees the moment the take begins.
 
 ## Export
 
+Export is a compositor that `rec` owns, which writes raw frames to an encoder. It does not use ffmpeg filtergraphs. The same compositor runs on every platform, so a take looks the same wherever it is exported. The macOS CoreImage exporter is the current implementation of this and gets replaced by the portable one.
+
 Layouts are data: a table of presets keyed by aspect, each giving the canvas size, the screen rect, and the camera rect and shape.
 
-- `16:9` is 1920x1080. The screen is fit inside with a small margin on a dark background, and the camera is a circle in the bottom-right corner.
-- `9:16` is 1080x1920. The screen sits in the top portion, cropped to fill a 1080-wide region, centered on the cursor's average position if there is timeline data. The camera is a large circle in the lower portion.
+- `16:9` is 1920x1080. The screen is fit inside with a small margin on a dark background. The camera, if present, is a circle in the bottom-right corner.
+- `9:16` is 1080x1920. The screen sits in the top portion, cropped to fill a 1080-wide region and centered on the cursor's average position if there is timeline data. The camera, if present, is a large circle in the lower portion. Without a camera, the screen gets the full height.
 
-The attention border is a risograph ring around the camera circle: one grainy ring per spot ink (fluorescent pink, riso blue, yellow), each on its own plate, multiplied where they overlap. Its look at time t is a pure function. In the intro, from 0 to about 1.5s, the plates start far out of register, snap into place by 0.75s, and kick apart once on the beat. After that, a thin ring stays slightly misregistered and boils, wobbling at 10 fps. `--no-border` turns it off.
+`tty` takes are rendered at export. The cast is replayed through a terminal emulator (libghostty-vt is the intended engine) onto a canvas. Font, theme, and pixel scale are export choices. The grid (cols x rows) is fixed when the take is recorded, because the program laid out its output for that size, so an agent that wants a legible 9:16 records at a narrow size such as `--size 60x40`. Typed input from the timeline can drive a typing highlight.
 
-An export opens at the latest video track offset, the first moment both the screen and the camera have a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.
+The attention border is a risograph ring around the camera circle, or around the screen when there is no camera: one grainy ring per spot ink (fluorescent pink, riso blue, yellow), each on its own plate, multiplied where they overlap. Its look at time t is a pure function. In the intro, from 0 to about 1.5s, the plates start far out of register, snap into place by 0.75s, and kick apart once on the beat. After that, a thin ring stays slightly misregistered and boils, wobbling at 10 fps. `--no-border` turns it off.
+
+An export opens at the latest video track offset, the first moment every video track has a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.
+
+## Build order
+
+1. `tty` end to end: `rec start --tty`, `type`, `key`, `wait`, `screen`, `stop`, rendering the cast to frames, and export to MP4 inside a Vercel Sandbox. This alone covers herdr, Claude Code mods, and CLI demos.
+2. The portable compositor with layouts and the border, replacing the CoreImage exporter. Upload.
+3. The `x11` source: Xvfb lifecycle, x11grab, XTEST input, `rec screen --png`.
+4. The macOS capture backend writes version 2 takes and uses the shared exporter.
+5. Later: OCR for `rec wait` on `x11`, auto-zoom on clicks, blur of sensitive regions, transcription and summary, TTS narration, a Claude Code mod, Wayland.
+
+## Open decisions
+
+- **Language for the portable core.** The Linux binary needs PTY handling, a terminal emulator, a compositor, and a static musl build, and none of that uses Apple frameworks. The recommendation is Rust: mature PTY and image crates, it can call libghostty-vt through its C API, and the static build is easy. The Swift code stays as the macOS capture backend.
+- **First upload target.**
+- **Bundling the encoder:** a static ffmpeg download versus linking openh264 or x264 into the binary. x264 is GPL, and openh264 is BSD-licensed with Cisco's patent arrangement.
