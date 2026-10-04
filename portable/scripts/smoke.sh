@@ -54,6 +54,10 @@ run type 'printf "\e[1;35mhello\e[0m\n"; ls --color=always /' >/dev/null
 run key Return >/dev/null
 # Anchored, so the echoed command line (which also contains "hello") does not count.
 run wait --text '(?m)^hello' --timeout 10 >/dev/null || fail "hello never appeared"
+# Symbols JetBrains Mono lacks, as octal bytes so bash needs no UTF-8 locale. frame-*.png shows them.
+run type --delay 1 'printf "glyphs: \342\234\224 \342\234\227 \342\206\222 \342\206\265 \342\217\272 \342\216\277 \342\227\217 \342\226\266 \342\230\205 \342\243\277\342\240\213\342\240\271 \342\225\255\342\224\200\342\225\256\342\224\202\342\225\260\342\224\200\342\225\257 \342\224\214\342\224\254\342\224\220\342\224\224\342\224\264\342\224\230\n"' >/dev/null
+run key Return >/dev/null
+run wait --text '(?m)^glyphs: ✔' --timeout 10 >/dev/null || fail "glyph line never appeared"
 mark=$(run mark done)
 check "mark returns its label" 'j["label"] == "done" and j["t"] > 0' "$mark"
 sleep 1
