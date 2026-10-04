@@ -143,7 +143,7 @@ Each driving command records itself in the timeline and returns `{"t"}` on the t
 
 ### Composing and delivering
 
-- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "path", "width", "height", "duration", "url"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows and `follow` when 9:16 crops a wide grid to a panning window (see Export). `url` is present only with `--upload`.
+- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--tighten] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "path", "width", "height", "duration", "url"?, "tightened"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows and `follow` when 9:16 crops a wide grid to a panning window (see Export). `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export.
 - `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`.
 - `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first.
 
@@ -184,6 +184,40 @@ Layouts are data: a table of presets keyed by aspect, each giving the canvas siz
 `tty` takes are rendered at export. The cast is replayed through a terminal emulator (libghostty-vt is the intended engine) onto a canvas. Font, theme, and pixel scale are export choices. The grid (cols x rows) is fixed when the take is recorded, because the program laid out its output for that size. A take meant for vertical video records with `--for 9:16`, so 9:16 shows every column instead of panning. Typed input from the timeline can drive a typing highlight.
 
 The attention border is a risograph ring around the camera circle, or around the visible terminal panel (the window, when 9:16 follows) when there is no camera: one grainy ring per spot ink (fluorescent pink, riso blue, yellow), each on its own plate, multiplied where they overlap. Its look at time t is a pure function. In the intro, from 0 to about 1.5s, the plates start far out of register, snap into place by 0.75s, and kick apart once on the beat. After that, a thin ring stays slightly misregistered and boils, wobbling at 10 fps. The border is off by default, and `--border` turns it on.
+
+### Tighten
+
+An agent drives a take with guessed sleeps and slow think time between inputs, so the raw video is mostly dead air. `--tighten` removes it using only data the take already has: the input events in timeline.json and every output chunk in term.cast. The same input always gives the same edit.
+
+The cast is replayed through the emulator, and each export frame whose screen differs from the frame before is a change. A change is minor when it edits at most 24 cells on at most 2 rows that already had text, like a spinner glyph and an elapsed-time counter. Any other change is content. Changes and inputs closer than 0.5s form a burst. That splits the take into segments that cover it end to end:
+
+| kind | span | output |
+|---|---|---|
+| `lead` | before anything is drawn | cut |
+| `typing` | an input through its echo: 0.5s, plus 0.1s per typed character, ended early by the next input | 1x |
+| `content` | the rest of a burst: output nobody just asked for, or output that outlasts the echo | 1x for 3s, the remainder at 2x |
+| `busy` | a quiet span (no changes, or only minor ones) that ends in output the program produced on its own, like a spinner before a result | whole if 2s or shorter, otherwise compressed to 2s, but never faster than 12x and never shorter than the reading hold |
+| `settled` | a quiet span that ends in an input | the reading hold, then a cut to 0.25s before the input so the viewer sees it land |
+| `end` | a quiet span that ends the take | the reading hold, at least 2s |
+
+The reading hold is `clamp(0.6 + words / 4, 1.2, 6)` seconds. `words` counts the words on the span's first screen that the viewer has not already read. A word counts as read once a quiet screen has shown it, or once `rec type` typed it, so a shell screen that comes back after a full-screen program exits holds briefly. A quiet span shorter than its hold plays whole.
+
+The policy yields a monotonic piecewise-linear map from output time to take time, with a jump at each cut. Export draws frame `f` from the screen at `take_time((f + 1) / 30)`. The 9:16 camera and the attention border run on output time, as they do without `--tighten`. Cuts fall only inside quiet spans, so they skip nothing but minor changes.
+
+Each export then carries the edit, so an agent can inspect it:
+
+```json
+"tightened": {
+  "duration_raw": 179.788,
+  "duration": 37.679,
+  "segments": [
+    { "kind": "settled", "take": [117.209, 158.643], "out": [27.757, 34.007], "words": 194, "hold": 6.0 },
+    { "kind": "typing",  "take": [158.643, 158.715], "out": [34.007, 34.079] }
+  ]
+}
+```
+
+`take` and `out` are each segment's span on the take clock and in the video. Segments run back to back from 0 to `duration_raw` and from 0 to `duration`. `words` appears on `busy`, `settled`, and `end`, and `hold` on `settled` and `end`. Tighten does not judge meaning: a fumbled input that gets undone, or which screen is the payoff, needs a model-based pass that edits this segment list.
 
 An export opens at the latest video track offset, the first moment every video track has a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.
 
