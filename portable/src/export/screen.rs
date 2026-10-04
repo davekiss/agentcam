@@ -4,11 +4,12 @@
 
 use super::camera::{Camera, Focus};
 use super::layout::{Preset, Rect, ScreenViewport};
+use super::pointer::{self, CursorMode, Look, Placement, Pointer};
 use super::render;
 use super::theme::Rgb;
 use super::{Frames, FPS};
 use crate::error::{RecError, Result};
-use crate::model::{self, Event, Take, Track};
+use crate::model::{self, Event, PointerCapture, Take, Track};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -27,15 +28,20 @@ pub struct ScreenTake {
     /// one, the ink is everything changed since it began, so a title bar redrawn a frame after
     /// the prompt widens the ink instead of pulling the window away from the prompt.
     echoes: Vec<(f64, f64)>,
+    /// The pointer export draws, when the capture left it out of the video.
+    overlay: Option<Pointer>,
 }
 
 /// How long after an input the screen's changes count as its echo, plus per typed character.
 const ECHO: f64 = 0.5;
 const ECHO_PER_CHAR: f64 = 0.05;
+/// The 9:16 window heads for where the pointer is going this far ahead, so it has arrived by the
+/// time a click lands instead of panning in after its ripple has faded.
+const POINTER_LEAD: f64 = 0.5;
 
 impl ScreenTake {
     pub fn read(dir: &Path, take: &Take) -> Result<ScreenTake> {
-        let (file, offset, width, height) = take
+        let (file, offset, width, height, capture) = take
             .tracks
             .iter()
             .find_map(|t| match t {
@@ -44,7 +50,8 @@ impl ScreenTake {
                     offset,
                     width,
                     height,
-                } => Some((file, *offset, *width, *height)),
+                    pointer,
+                } => Some((file, *offset, *width, *height, *pointer)),
                 _ => None,
             })
             .ok_or_else(|| RecError::new("bad_take", format!("{} has no screen track", take.id)))?;
@@ -67,6 +74,7 @@ impl ScreenTake {
                 _ => None,
             })
             .collect();
+        let overlay = (capture == PointerCapture::Timeline).then(|| Pointer::new(&events));
         Ok(ScreenTake {
             path: dir.join(file),
             offset,
@@ -74,6 +82,7 @@ impl ScreenTake {
             height,
             pointer,
             echoes,
+            overlay,
         })
     }
 
@@ -196,8 +205,12 @@ pub struct ScreenFrames<'a> {
     /// The echo span now playing, and the columns changed since it began.
     echo: EchoState,
     canvas_w: u32,
+    canvas_h: u32,
     canvas_color: Rgb,
     shown: Option<f64>,
+    cursor: CursorMode,
+    /// The pointer drawn over the frame last shown.
+    drawn: Option<Look>,
 }
 
 impl<'a> ScreenFrames<'a> {
@@ -207,6 +220,7 @@ impl<'a> ScreenFrames<'a> {
         preset: &Preset,
         viewport: ScreenViewport,
         canvas_color: Rgb,
+        cursor: CursorMode,
     ) -> Result<ScreenFrames<'a>> {
         let camera = match viewport {
             ScreenViewport::Follow {
@@ -222,8 +236,11 @@ impl<'a> ScreenFrames<'a> {
             next_event: 0,
             echo: None,
             canvas_w: preset.width,
+            canvas_h: preset.height,
             canvas_color,
             shown: None,
+            cursor,
+            drawn: None,
         })
     }
 
@@ -252,7 +269,7 @@ impl Frames for ScreenFrames<'_> {
         let change = self.decoder.seek(f, w);
         let changed = change.is_some();
         let t = self.take.offset + f as f64 / FPS as f64;
-        let moved = self.pointer_since_last(t);
+        let moved = self.pointer_since_last(t + POINTER_LEAD);
         let ink = self.echo_ink(t, change);
         let (panel, left, step_x) = match self.viewport {
             ScreenViewport::Fit { panel } => (panel, 0.0, w as f64 / panel.w as f64),
@@ -279,15 +296,15 @@ impl Frames for ScreenFrames<'_> {
                 (panel, cam.x().round() / scale, 1.0 / scale)
             }
         };
-        if !changed && self.shown == Some(left) {
+        let look = self.take.overlay.as_ref().and_then(|p| p.look(t, self.cursor));
+        if !changed && self.shown == Some(left) && look == self.drawn {
             return Ok(false);
         }
         if self.shown.is_none() {
-            let height = canvas.len() as u32 / 4 / self.canvas_w;
             render::fill(
                 canvas,
                 self.canvas_w,
-                render::full(self.canvas_w, height),
+                render::full(self.canvas_w, self.canvas_h),
                 self.canvas_color,
             );
         }
@@ -297,7 +314,17 @@ impl Frames for ScreenFrames<'_> {
             h,
         };
         scale_into(&src, left, step_x, canvas, self.canvas_w, panel);
+        if let Some(look) = &look {
+            let at = Placement {
+                origin: (panel.x as f64 - left / step_x, panel.y as f64),
+                scale: (1.0 / step_x, panel.h as f64 / h as f64),
+                source: (w, h),
+                clip: panel,
+            };
+            pointer::draw(look, &at, canvas, self.canvas_w, self.canvas_h);
+        }
         self.shown = Some(left);
+        self.drawn = look;
         Ok(true)
     }
 }

@@ -106,6 +106,9 @@ struct ExportArgs {
     /// Draw the risograph attention border.
     #[arg(long)]
     border: bool,
+    /// x11: when to draw the pointer. auto shows it while it moves and around clicks.
+    #[arg(long, value_enum, default_value_t)]
+    cursor: export::pointer::CursorMode,
     /// Retime the take so its pacing follows the app: cut dead air, compress waits.
     #[arg(long)]
     tighten: bool,
@@ -522,6 +525,7 @@ fn export(args: ExportArgs) -> Result<Value> {
         theme,
         font_size: font_px,
         border,
+        cursor,
         tighten,
         plan_out,
         plan,
@@ -569,6 +573,7 @@ fn export(args: ExportArgs) -> Result<Value> {
             theme,
             font_px,
             border,
+            cursor,
             pacing,
         },
     )?;

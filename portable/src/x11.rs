@@ -4,7 +4,7 @@
 
 use crate::error::{RecError, Result};
 use crate::keys;
-use crate::model::{self, normalize, Button, Event, Frame, Track};
+use crate::model::{self, normalize, Button, Event, Frame, PointerCapture, Track};
 use crate::recorder::{Capture, FinishReason, Journal, Started};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
@@ -286,7 +286,7 @@ fn start_ffmpeg(display: u32, frame: Frame, out: &Path) -> Result<Encoder> {
             .args(["-hide_banner", "-nostdin", "-loglevel", "info", "-nostats"])
             .args(["-f", "x11grab", "-framerate", &FPS.to_string()])
             .args(["-video_size", &format!("{}x{}", frame.width, frame.height)])
-            .args(["-draw_mouse", "1", "-i", &format!(":{display}")])
+            .args(["-draw_mouse", "0", "-i", &format!(":{display}")])
             .args(["-c:v", "libx264", "-preset", PRESET, "-pix_fmt", "yuv420p"])
             .args(["-progress", "pipe:1", "-stats_period", "0.1", "-y"])
             .arg(out)
@@ -348,6 +348,9 @@ pub fn start(dir: &Path, command: &[String], frame: Frame) -> Result<Started> {
 
     let journal = Journal::start();
     let clocks = Clocks::now();
+    // Export draws the pointer from the timeline, so its position is known from t0.
+    let at_start = x.pointer()?;
+    log_pointer(&x, &journal, journal.now(), at_start);
     let enc = start_ffmpeg(n, frame, &dir.join(model::SCREEN_FILE))?;
     children.ffmpeg_log = enc.log.clone();
     let ffmpeg = children.ffmpeg.insert(enc.child);
@@ -402,7 +405,7 @@ pub fn start(dir: &Path, command: &[String], frame: Frame) -> Result<Started> {
     let sampling = Arc::new(AtomicBool::new(true));
     {
         let (x, journal, sampling) = (x.clone(), journal.clone(), sampling.clone());
-        std::thread::spawn(move || sample_pointer(&x, &journal, &sampling));
+        std::thread::spawn(move || sample_pointer(&x, &journal, &sampling, at_start));
     }
     Ok(Started {
         journal,
@@ -416,26 +419,31 @@ pub fn start(dir: &Path, command: &[String], frame: Frame) -> Result<Started> {
             offset: model::round_t(offset),
             width: frame.width,
             height: frame.height,
+            pointer: PointerCapture::Timeline,
         }],
         display: Some(display),
     })
 }
 
-/// Logs a `cursor` event, normalized to the frame, each time the pointer moves, at 30 Hz.
-fn sample_pointer(x: &Screen, journal: &Journal, sampling: &AtomicBool) {
-    let mut last = None;
+fn log_pointer(x: &Screen, journal: &Journal, t: f64, p: (i16, i16)) {
+    journal.log(
+        t,
+        Event::Cursor {
+            x: normalize(p.0 as f64, x.frame.width),
+            y: normalize(p.1 as f64, x.frame.height),
+        },
+    );
+}
+
+/// Logs a `cursor` event, normalized to the frame, each time the pointer moves from `last`, at
+/// 30 Hz.
+fn sample_pointer(x: &Screen, journal: &Journal, sampling: &AtomicBool, mut last: (i16, i16)) {
     while sampling.load(Ordering::Relaxed) {
         let t = journal.now();
         if let Ok(p) = x.pointer() {
-            if last != Some(p) {
-                last = Some(p);
-                journal.log(
-                    t,
-                    Event::Cursor {
-                        x: normalize(p.0 as f64, x.frame.width),
-                        y: normalize(p.1 as f64, x.frame.height),
-                    },
-                );
+            if p != last {
+                last = p;
+                log_pointer(x, journal, t, p);
             }
         }
         std::thread::sleep(Duration::from_secs(1) / FPS);

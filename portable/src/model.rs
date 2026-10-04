@@ -118,7 +118,20 @@ pub enum Track {
         offset: f64,
         width: u32,
         height: u32,
+        /// Takes from before this field captured the pointer into the video.
+        #[serde(default)]
+        pointer: PointerCapture,
     },
+}
+
+/// Where a screen track's pointer is: drawn into the video by the capture, or only in the
+/// timeline, for export to draw.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PointerCapture {
+    #[default]
+    Baked,
+    Timeline,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -327,6 +340,25 @@ mod tests {
             serde_json::to_string(&click).unwrap(),
             r#"{"t":1.2,"type":"click","x":0.415104,"y":0.230556,"button":"left"}"#
         );
+    }
+
+    #[test]
+    fn a_screen_track_without_a_pointer_field_has_it_baked_in() {
+        let old = r#"{"kind":"screen","file":"screen.mp4","offset":0.5,"width":1920,"height":1080}"#;
+        let Track::Screen { pointer, .. } = serde_json::from_str(old).unwrap() else {
+            panic!("a screen track");
+        };
+        assert_eq!(pointer, PointerCapture::Baked);
+        let new = Track::Screen {
+            file: SCREEN_FILE.into(),
+            offset: 0.5,
+            width: 1920,
+            height: 1080,
+            pointer: PointerCapture::Timeline,
+        };
+        assert!(serde_json::to_string(&new)
+            .unwrap()
+            .ends_with(r#""pointer":"timeline"}"#));
     }
 
     #[test]

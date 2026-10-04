@@ -3,6 +3,7 @@
 
 mod border;
 mod camera;
+pub mod pointer;
 pub mod layout;
 mod render;
 mod screen;
@@ -24,6 +25,7 @@ pub struct ExportOptions {
     pub theme: &'static theme::Theme,
     pub font_px: Option<f32>,
     pub border: bool,
+    pub cursor: pointer::CursorMode,
     pub pacing: Pacing,
 }
 
@@ -216,7 +218,14 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                     viewport.kind()
                 );
                 let mut source =
-                    screen::ScreenFrames::new(&ffmpeg, take, preset, viewport, opts.theme.canvas)?;
+                    screen::ScreenFrames::new(
+                    &ffmpeg,
+                    take,
+                    preset,
+                    viewport,
+                    opts.theme.canvas,
+                    opts.cursor,
+                )?;
                 let ring = opts.border.then(|| viewport.panel());
                 encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
                 (frames, viewport.kind())
