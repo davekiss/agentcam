@@ -63,31 +63,45 @@ enum Cmd {
         timeout: f64,
     },
     /// Render a take to MP4.
-    Export {
-        /// Take folder path or take id.
-        take: String,
-        /// 16:9 or 9:16; repeat for several. Defaults to all.
-        #[arg(long = "layout")]
-        layouts: Vec<String>,
-        #[arg(long, default_value = "dark")]
-        theme: String,
-        /// Font size in pixels. Defaults to the largest that fits.
-        #[arg(long)]
-        font_size: Option<f32>,
-        /// Draw the risograph attention border.
-        #[arg(long)]
-        border: bool,
-        /// Retime the take so its pacing follows the app: cut dead air, compress waits.
-        #[arg(long)]
-        tighten: bool,
-        /// `blob` or `blob:private` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN), or a presigned https:// PUT URL.
-        #[arg(long)]
-        upload: Option<String>,
-    },
+    Export(ExportArgs),
     /// Report the platform and what each source needs.
     Doctor,
     /// List what can be captured.
     Sources,
+}
+
+#[derive(Args)]
+struct ExportArgs {
+    /// Take folder path or take id.
+    take: String,
+    /// 16:9 or 9:16; repeat for several. Defaults to all.
+    #[arg(long = "layout")]
+    layouts: Vec<String>,
+    #[arg(long, default_value = "dark")]
+    theme: String,
+    /// Font size in pixels. Defaults to the largest that fits.
+    #[arg(long)]
+    font_size: Option<f32>,
+    /// Draw the risograph attention border.
+    #[arg(long)]
+    border: bool,
+    /// Retime the take so its pacing follows the app: cut dead air, compress waits.
+    #[arg(long)]
+    tighten: bool,
+    /// With --tighten: write the edit plan to this JSON file and render nothing.
+    #[arg(
+        long,
+        value_name = "FILE",
+        requires = "tighten",
+        conflicts_with = "upload"
+    )]
+    plan_out: Option<PathBuf>,
+    /// Retime with an edited plan from --plan-out instead of the tighten policy.
+    #[arg(long, value_name = "FILE", conflicts_with = "tighten")]
+    plan: Option<PathBuf>,
+    /// `blob` or `blob:private` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN), or a presigned https:// PUT URL.
+    #[arg(long)]
+    upload: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -169,23 +183,7 @@ fn run(cmd: Cmd) -> Result<Value> {
             other => unexpected(other),
         },
         Cmd::Wait { text, new, timeout } => wait(&text, new, timeout),
-        Cmd::Export {
-            take,
-            layouts,
-            theme,
-            font_size,
-            border,
-            tighten,
-            upload,
-        } => export(
-            &take,
-            layouts,
-            &theme,
-            font_size,
-            border,
-            tighten,
-            upload.as_deref(),
-        ),
+        Cmd::Export(args) => export(args),
         Cmd::Doctor => Ok(doctor()),
         Cmd::Sources => Ok(json!({ "tty": true, "x11": false })),
     }
@@ -251,8 +249,11 @@ fn start(args: RecordArgs) -> Result<Value> {
     let out = args.out.clone().map_or_else(paths::default_out_dir, Ok)?;
     let dir = paths::create_take_dir(&out, chrono::Local::now())?;
     let log_path = dir.join(model::LOG_FILE);
-    let log = std::fs::File::create(&log_path).map_err(|e| RecError::io("create recorder.log", e))?;
-    let log_err = log.try_clone().map_err(|e| RecError::io("recorder.log", e))?;
+    let log =
+        std::fs::File::create(&log_path).map_err(|e| RecError::io("create recorder.log", e))?;
+    let log_err = log
+        .try_clone()
+        .map_err(|e| RecError::io("recorder.log", e))?;
 
     let exe = std::env::current_exe().map_err(|e| RecError::io("locate rec binary", e))?;
     let mut cmd = std::process::Command::new(exe);
@@ -276,9 +277,7 @@ fn start(args: RecordArgs) -> Result<Value> {
             Ok(())
         });
     }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| RecError::io("spawn recorder", e))?;
+    let mut child = cmd.spawn().map_err(|e| RecError::io("spawn recorder", e))?;
 
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -297,7 +296,10 @@ fn start(args: RecordArgs) -> Result<Value> {
             let _ = child.kill();
             return Err(RecError::new(
                 "start_timeout",
-                format!("recorder did not answer within 10s; see {}", log_path.display()),
+                format!(
+                    "recorder did not answer within 10s; see {}",
+                    log_path.display()
+                ),
             ));
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -380,19 +382,35 @@ fn wait(pattern: &str, new: bool, timeout: f64) -> Result<Value> {
     }
 }
 
-fn export(
-    take: &str,
-    layouts: Vec<String>,
-    theme: &str,
-    font_px: Option<f32>,
-    border: bool,
-    tighten: bool,
-    upload: Option<&str>,
-) -> Result<Value> {
+fn export(args: ExportArgs) -> Result<Value> {
+    let ExportArgs {
+        take,
+        layouts,
+        theme,
+        font_size: font_px,
+        border,
+        tighten,
+        plan_out,
+        plan,
+        upload,
+    } = args;
     let upload = upload
-        .map(|t| upload::Target::parse(t, |k| std::env::var(k).ok()))
+        .map(|t| upload::Target::parse(&t, |k| std::env::var(k).ok()))
         .transpose()?;
-    let dir = paths::resolve_take(take)?;
+    let dir = paths::resolve_take(&take)?;
+    if let Some(path) = plan_out {
+        let plan = export::plan(&dir)?;
+        let json = serde_json::to_string_pretty(&plan).expect("serializable");
+        std::fs::write(&path, json + "\n")
+            .map_err(|e| RecError::io(&path.display().to_string(), e))?;
+        return Ok(json!({ "take": dir, "plan": path, "segments": plan.segments.len() }));
+    }
+    let pacing = match (plan, tighten) {
+        (Some(path), _) => export::Pacing::Plan(read_plan(&path)?),
+        (None, true) => export::Pacing::Tighten,
+        (None, false) => export::Pacing::Raw,
+    };
+    let theme = theme.as_str();
     let layouts = if layouts.is_empty() {
         export::layout::PRESETS.to_vec()
     } else {
@@ -418,7 +436,7 @@ fn export(
             theme,
             font_px,
             border,
-            tighten,
+            pacing,
         },
     )?;
     let take_id = paths::take_id(&dir);
@@ -433,6 +451,17 @@ fn export(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(json!({ "take": dir, "exports": exports }))
+}
+
+fn read_plan(path: &std::path::Path) -> Result<export::tighten::Plan> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| RecError::io(&path.display().to_string(), e))?;
+    serde_json::from_str(&raw).map_err(|e| {
+        RecError::new(
+            "bad_args",
+            format!("{} is not a tighten plan: {e}", path.display()),
+        )
+    })
 }
 
 fn doctor() -> Value {

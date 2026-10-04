@@ -22,7 +22,17 @@ pub struct ExportOptions {
     pub theme: &'static theme::Theme,
     pub font_px: Option<f32>,
     pub border: bool,
-    pub tighten: bool,
+    pub pacing: Pacing,
+}
+
+/// How export maps video time to take time.
+pub enum Pacing {
+    /// Play the take as recorded.
+    Raw,
+    /// `--tighten`: the policy's edit.
+    Tighten,
+    /// `--plan`: an edit written by `--plan-out` and changed by a caller.
+    Plan(tighten::Plan),
 }
 
 #[derive(Debug, Serialize)]
@@ -38,34 +48,85 @@ pub struct Export {
     pub tightened: Option<tighten::Tightened>,
 }
 
+/// A finished tty take, read for export.
+struct Loaded {
+    take: Take,
+    duration: f64,
+    cast: crate::cast::Cast,
+    size: model::Size,
+}
+
+impl Loaded {
+    fn read(dir: &Path) -> Result<Loaded> {
+        let take = Take::read(dir)?;
+        let Source::Tty { .. } = take.source;
+        let duration = take.duration.ok_or_else(|| {
+            RecError::new(
+                "not_finished",
+                format!("{} has no duration yet; stop it first", take.id),
+            )
+        })?;
+        let cast_path = dir.join(model::CAST_FILE);
+        let cast_file = std::fs::File::open(&cast_path)
+            .map_err(|e| RecError::io(&cast_path.display().to_string(), e))?;
+        let cast = crate::cast::read(std::io::BufReader::new(cast_file))?;
+        let size = model::Size {
+            cols: cast.header.width,
+            rows: cast.header.height,
+        };
+        Ok(Loaded {
+            take,
+            duration,
+            cast,
+            size,
+        })
+    }
+
+    fn segments(&self, dir: &Path) -> Result<Vec<tighten::Segment>> {
+        let timeline = model::Timeline::read(dir)?;
+        let points = tighten::analyze(
+            &self.cast.output,
+            &timeline.events,
+            self.size,
+            self.duration,
+        );
+        Ok(tighten::segment(&points, self.duration))
+    }
+}
+
+/// `--plan-out`: the tighten plan for the take at `dir`, without rendering.
+pub fn plan(dir: &Path) -> Result<tighten::Plan> {
+    let loaded = Loaded::read(dir)?;
+    let segments = loaded.segments(dir)?;
+    Ok(tighten::Plan::new(
+        &loaded.take.id,
+        &segments,
+        &tighten::POLICY,
+        loaded.duration,
+    ))
+}
+
 pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
-    let take = Take::read(dir)?;
-    let Source::Tty { .. } = take.source;
-    let duration = take.duration.ok_or_else(|| {
-        RecError::new(
-            "not_finished",
-            format!("{} has no duration yet; stop it first", take.id),
-        )
-    })?;
-    let cast_path = dir.join(model::CAST_FILE);
-    let cast_file = std::fs::File::open(&cast_path)
-        .map_err(|e| RecError::io(&cast_path.display().to_string(), e))?;
-    let cast = crate::cast::read(std::io::BufReader::new(cast_file))?;
-    let size = model::Size {
-        cols: cast.header.width,
-        rows: cast.header.height,
+    let loaded = Loaded::read(dir)?;
+    let duration = loaded.duration;
+    let (map, tightened) = match &opts.pacing {
+        Pacing::Raw => (tighten::TimeMap::identity(duration), None),
+        Pacing::Tighten => {
+            let segments = loaded.segments(dir)?;
+            let (map, report) = tighten::plan(&segments, &tighten::POLICY, duration);
+            (map, Some(report))
+        }
+        Pacing::Plan(plan) => {
+            let segments = loaded.segments(dir)?;
+            let cuts = plan.cuts(&segments)?;
+            let (map, report) =
+                tighten::retime(&segments, &cuts, tighten::POLICY.preroll, duration);
+            (map, Some(report))
+        }
     };
+    let Loaded { cast, size, .. } = loaded;
     let ffmpeg = find_ffmpeg()?;
     let fonts = render::Fonts::load();
-    let (map, tightened) = if opts.tighten {
-        let timeline = model::Timeline::read(dir)?;
-        let points = tighten::analyze(&cast.output, &timeline.events, size, duration);
-        let segments = tighten::segment(&points, duration);
-        let (map, report) = tighten::plan(&segments, &tighten::POLICY, duration);
-        (map, Some(report))
-    } else {
-        (tighten::TimeMap::identity(duration), None)
-    };
     let frames = ((map.duration() * FPS as f64).round() as u64).max(1);
 
     let mut out = Vec::new();
@@ -81,9 +142,15 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
         );
         let mut enc = Encoder::spawn(&ffmpeg, &path, preset.width, preset.height)?;
         let mut parser = vt100::Parser::new(size.rows, size.cols, 0);
-        let ring = opts.border.then(|| border::Target::screen(viewport.panel()));
+        let ring = opts
+            .border
+            .then(|| border::Target::screen(viewport.panel()));
         let mut term = vec![0u8; (preset.width * preset.height * 4) as usize];
-        let mut framed = if ring.is_some() { term.clone() } else { Vec::new() };
+        let mut framed = if ring.is_some() {
+            term.clone()
+        } else {
+            Vec::new()
+        };
         let mut painted: Option<(border::Look, border::Overlay)> = None;
         let mut next = 0;
         for f in 0..frames {
@@ -107,7 +174,11 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
             }
             if drawn || new_look {
                 framed.copy_from_slice(&term);
-                painted.as_ref().expect("painted above").1.apply(&mut framed);
+                painted
+                    .as_ref()
+                    .expect("painted above")
+                    .1
+                    .apply(&mut framed);
             }
             enc.write(&framed)?;
         }
@@ -128,7 +199,10 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
 /// The grid that fills `layout` at a legible size in the embedded font, for `--for`.
 pub fn grid_for(layout: &str) -> Result<model::Size> {
     let preset = layout::preset(layout)?;
-    Ok(layout::grid_for(&preset, render::Fonts::load().cell_metrics()))
+    Ok(layout::grid_for(
+        &preset,
+        render::Fonts::load().cell_metrics(),
+    ))
 }
 
 pub fn find_on_path(name: &str) -> Option<PathBuf> {

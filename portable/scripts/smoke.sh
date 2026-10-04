@@ -160,6 +160,17 @@ probe=$(ffprobe -v error -show_entries format=duration -of json "$TAKE/export-16
 check "--tighten video is as long as tightened.duration ($tight_duration)" \
   'abs(float(j["format"]["duration"]) - '"$tight_duration"') <= 0.1' "$probe"
 
+planned=$(run export "$TAKE" --tighten --plan-out "$OUT/plan.json")
+check "--plan-out writes a plan without rendering" '"exports" not in j and j["segments"] > 0' "$planned"
+check "the plan carries the quiet screens' text" \
+  'any("smoke-42" in s.get("screen_text", "") for s in j["segments"])' "$(cat "$OUT/plan.json")"
+replayed=$(run export "$TAKE" --layout 16:9 --plan "$OUT/plan.json")
+check "an unedited plan renders the --tighten edit" \
+  'j["exports"][0]["tightened"] == '"$(printf '%s' "$tight" | json 'j["exports"][0]["tightened"]')" "$replayed"
+python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["segments"][1]["take"][1] += 1; json.dump(p, open(sys.argv[1], "w"))' "$OUT/plan.json"
+mismatched=$("$REC" export "$TAKE" --layout 16:9 --plan "$OUT/plan.json" 2>/dev/null) && fail "a plan for another take rendered"
+check "a plan for another take is bad_args" 'j["error"]["code"] == "bad_args"' "$mismatched"
+
 both=$("$REC" start --tty --for 9:16 --size 80x24 -- true 2>/dev/null) && fail "--for with --size succeeded"
 check "--for with --size is bad_args" 'j["error"]["code"] == "bad_args"' "$both"
 

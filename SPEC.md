@@ -143,7 +143,7 @@ Each driving command records itself in the timeline and returns `{"t"}` on the t
 
 ### Composing and delivering
 
-- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--tighten] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "path", "width", "height", "duration", "url"?, "tightened"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows and `follow` when 9:16 crops a wide grid to a panning window (see Export). `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export.
+- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--tighten [--plan-out <file>]] [--plan <file>] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "path", "width", "height", "duration", "url"?, "tightened"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows and `follow` when 9:16 crops a wide grid to a panning window (see Export). `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export. `--tighten --plan-out` writes that edit as a plan file instead of rendering, and `--plan` renders with an edited plan (see Plans).
 - `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`.
 - `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first.
 
@@ -217,7 +217,22 @@ Each export then carries the edit, so an agent can inspect it:
 }
 ```
 
-`take` and `out` are each segment's span on the take clock and in the video. Segments run back to back from 0 to `duration_raw` and from 0 to `duration`. `words` appears on `busy`, `settled`, and `end`, and `hold` on `settled` and `end`. Tighten does not judge meaning: a fumbled input that gets undone, or which screen is the payoff, needs a model-based pass that edits this segment list.
+`take` and `out` are each segment's span on the take clock and in the video. Segments run back to back from 0 to `duration_raw` and from 0 to `duration`. `words` appears on `busy`, `settled`, and `end`, and `hold` (how long the screen stays up) on `settled` and `end`. A segment a plan dropped carries `"dropped": true`.
+
+#### Plans
+
+Tighten does not judge meaning: a fumbled input that gets undone, or which screen is the payoff, needs a pass that understands the screens. A plan file lets one edit the policy's choices.
+
+`rec export <take> --tighten --plan-out <file>` writes the plan and renders nothing, so it takes well under a second. It prints `{"take", "plan", "segments"}`. The plan holds the take id, `duration_raw`, an empty `purpose` for the caller to fill with what the video is about, and the segments in order:
+
+```json
+{ "id": 9, "kind": "settled", "take": [117.209, 158.643], "out_len": 6.0, "drop": false,
+  "words": 194, "inputs": ["key Return"], "screen_text": "...", "new_text": "..." }
+```
+
+`id` is the segment's index. `out_len` is the policy's choice in seconds, and what it means depends on `kind`. For `settled` it is the hold before the cut to the preroll. For `end` it is how much of the final screen plays. For every other kind it is the length the whole span plays in, so a `busy` span's compressed length and a `typing` or `content` span's playback length. A hold never outlasts the time the take spent on that screen. `busy`, `settled`, and `end` segments also carry `screen_text`, the screen at the end of the span with trailing blank lines trimmed; `new_text`, the words the reading-time rule counted as unread, joined by spaces; `words`, their count; and `inputs`, the inputs sent since the previous quiet segment, as `type "<text>"` or `key <combo>`.
+
+`rec export <take> --plan <file>` renders with an edited plan in place of the policy. It honors each segment's `out_len`, and `"drop": true` cuts the segment entirely. Take time still only moves forward, so the screen after a cut is exactly what the take showed then. A dropped `settled` segment still plays its 0.25s preroll when the input after it is kept, so the viewer sees that input land. The plan must come from the same take: the segment count, each `id`, `kind`, and `take` span (to the millisecond) must match what the take segments into, or export fails with `bad_args` before rendering. An unedited plan renders the same video as `--tighten`. `--plan` cannot be combined with `--tighten`, and `--plan-out` needs `--tighten`. Unknown fields in a plan are ignored, so a caller can annotate segments.
 
 An export opens at the latest video track offset, the first moment every video track has a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.
 
