@@ -262,7 +262,7 @@ pub(super) fn fill(buf: &mut [u8], stride_px: u32, r: Rect, c: Rgb) {
     for y in r.y..r.y + r.h {
         let start = ((y * stride_px + r.x) * 4) as usize;
         let end = start + (r.w * 4) as usize;
-        for chunk in buf[start..end].chunks_exact_mut(4) {
+        for chunk in buf[start..end].as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&px);
         }
     }

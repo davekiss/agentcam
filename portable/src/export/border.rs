@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(px(&buf, w, 200, 150), bg, "panel center untouched");
         assert_eq!(px(&buf, w, 5, 5), bg, "far canvas untouched");
         assert!(
-            buf.chunks_exact(4).all(|p| p[3] == 255),
+            buf.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "alpha stays opaque"
         );
         let stroke = (CALM_WIDTH as f32 * SCREEN_UNIT) as u32;
