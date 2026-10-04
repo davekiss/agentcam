@@ -112,10 +112,10 @@ class HoldScale(unittest.TestCase):
         self.assertEqual(plan["segments"][-1]["out_len"], jt.hold_for(4.0, 40))
         self.assertGreater(jt.hold_for(4.0, 40), jt.END_MIN)
 
-    def test_default_scale_leaves_holds_as_the_table_gives(self):
+    def test_default_scale_is_hold_scale(self):
         plan = undo_plan(BODY + "$ ")
         jt.apply_policy(plan, answers(plan))
-        self.assertEqual(plan["segments"][2]["out_len"], jt.hold_for(2.0, 0))
+        self.assertAlmostEqual(plan["segments"][2]["out_len"], jt.hold_for(2.0, 0) * jt.HOLD_SCALE)
 
 
 if __name__ == "__main__":

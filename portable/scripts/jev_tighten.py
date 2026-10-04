@@ -48,7 +48,7 @@ HOLD_TABLE = [
 ]
 END_MIN = 2.0  # The final screen holds at least this long, as in rec's policy.
 UNDO_THRESHOLD = 0.8
-HOLD_SCALE = 1.0  # Multiplies every non-end hold. End screens keep the END_MIN floor unscaled.
+HOLD_SCALE = 0.8  # Multiplies every non-end hold; 0.8 beat 1.0 on held-out takes. End screens keep the END_MIN floor unscaled.
 
 QUESTIONS = {
     "read_need": {
