@@ -147,7 +147,12 @@ Each driving command records itself in the timeline and returns `{"t"}` on the t
 - `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`.
 - `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first.
 
-The VM, and the take folder with it, is gone when the session ends, so delivery is part of export. Upload targets (an S3-compatible URL, Vercel Blob, Mux) are taken from flags or the environment. The first target is still to be chosen.
+The VM, and the take folder with it, is gone when the session ends, so delivery is part of export. `--upload` streams each finished export to its target and adds the `url` it can be fetched from. The target is one of:
+
+- `blob`: Vercel Blob, with the read-write token from `BLOB_READ_WRITE_TOKEN`. Each export goes to `rec/<take-id>/export-<layout>.mp4` as a public blob with no random suffix, and exporting the same take again overwrites it. `url` is the public URL the Blob API returns. The request matches what `put()` in `@vercel/blob` 2.8 sends (`PUT https://vercel.com/api/blob/?pathname=...`, API version 12). `REC_BLOB_API_URL` replaces the API base, for tests.
+- An `https://` URL: a presigned PUT, which S3, R2, GCS, and Mux direct uploads all hand out. It names one object, so it needs exactly one `--layout`, or export fails with `bad_args` before rendering. `url` is the presigned URL without its query string. Plain `http://` is accepted only for localhost.
+
+A missing token fails with `missing_credentials` naming the variable, before anything renders. A refused upload fails with `upload_failed`, carrying the HTTP status and the start of the response body. The export files stay on disk either way.
 
 ### Behavior shared by all commands
 
@@ -193,5 +198,4 @@ An export opens at the latest video track offset, the first moment every video t
 ## Open decisions
 
 - **Language for the portable core.** The Linux binary needs PTY handling, a terminal emulator, a compositor, and a static musl build, and none of that uses Apple frameworks. The recommendation is Rust: mature PTY and image crates, it can call libghostty-vt through its C API, and the static build is easy. The Swift code stays as the macOS capture backend.
-- **First upload target.**
 - **Bundling the encoder:** a static ffmpeg download versus linking openh264 or x264 into the binary. x264 is GPL, and openh264 is BSD-licensed with Cisco's patent arrangement.

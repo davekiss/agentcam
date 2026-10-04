@@ -7,6 +7,7 @@ mod output;
 mod paths;
 mod protocol;
 mod recorder;
+mod upload;
 
 use clap::{Args, Parser, Subcommand};
 use error::{RecError, Result};
@@ -76,6 +77,9 @@ enum Cmd {
         /// Leave out the attention border.
         #[arg(long)]
         no_border: bool,
+        /// `blob` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN) or a presigned https:// PUT URL.
+        #[arg(long)]
+        upload: Option<String>,
     },
     /// Report the platform and what each source needs.
     Doctor,
@@ -155,7 +159,8 @@ fn run(cmd: Cmd) -> Result<Value> {
             theme,
             font_size,
             no_border,
-        } => export(&take, layouts, &theme, font_size, !no_border),
+            upload,
+        } => export(&take, layouts, &theme, font_size, !no_border, upload.as_deref()),
         Cmd::Doctor => Ok(doctor()),
         Cmd::Sources => Ok(json!({ "tty": true, "x11": false })),
     }
@@ -354,7 +359,11 @@ fn export(
     theme: &str,
     font_px: Option<f32>,
     border: bool,
+    upload: Option<&str>,
 ) -> Result<Value> {
+    let upload = upload
+        .map(|t| upload::Target::parse(t, |k| std::env::var(k).ok()))
+        .transpose()?;
     let dir = paths::resolve_take(take)?;
     let layouts = if layouts.is_empty() {
         export::layout::PRESETS.to_vec()
@@ -371,6 +380,9 @@ fn export(
             format!("unknown theme {theme:?}; known: {}", known.join(", ")),
         )
     })?;
+    if let Some(target) = &upload {
+        target.check_layouts(layouts.len())?;
+    }
     let exports = export::export(
         &dir,
         &export::ExportOptions {
@@ -380,6 +392,17 @@ fn export(
             border,
         },
     )?;
+    let take_id = paths::take_id(&dir);
+    let exports = exports
+        .into_iter()
+        .map(|e| {
+            let url = match &upload {
+                Some(target) => Some(target.upload(&take_id, &e.path)?),
+                None => None,
+            };
+            Ok(upload::Delivered { export: e, url })
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(json!({ "take": dir, "exports": exports }))
 }
 
