@@ -7,7 +7,7 @@ Two ideas hold the design together:
 1. **Recording and composing are separate.** `rec` records the raw pieces of a take: the screen or terminal stream, optional camera and mic, and what happened as data. Layouts (16:9, 9:16), theming, and the attention border are applied at export. One recording gives every aspect ratio, and an agent can edit from the data instead of the pixels.
 2. **In a microVM, `rec` owns the environment it records.** A Firecracker VM has no display, GPU, camera, or sound device. `rec` creates the terminal or virtual display, runs the program inside it, and drives it with input, so the agent can launch, type, wait, and film without any desktop.
 
-Status: the macOS backend (ScreenCaptureKit, camera, mic, preview panel, CoreImage export) is implemented in Swift. Everything marked *Linux* below is planned.
+Status: the macOS backend (ScreenCaptureKit, camera, mic, preview panel, CoreImage export) is implemented in Swift. The portable Rust core in `portable/` implements the `tty` and `x11` sources, input, export, and upload.
 
 ## Verified on Vercel Sandbox (2026-10-03)
 
@@ -18,7 +18,9 @@ Probed on the default image: Ubuntu 26.04, kernel 6.18, 4 vCPU, 8 GB, non-root `
 - Ghostty runs on Xvfb using Mesa llvmpipe (OpenGL 4.5, software). A 10s `ffmpeg -f x11grab` capture at 1920x1080 and 30 fps kept 299 of 300 frames. During the capture Ghostty used about 90% of one core, ffmpeg (x264 ultrafast) about 70%, and Xvfb about 20%. xdotool typing into Ghostty works.
 - `script --log-io --log-timing` captures a PTY session with timing and no display: 1.4 KB for a one-second session. tmux runs htop headless.
 
-So the pixel route works but costs about two cores, and the terminal route is nearly free. Dependency install time (around 40s per boot) is the biggest cost an agent pays, which is why install is a requirement below.
+So the pixel route works but costs about two cores, and the terminal route is nearly free.
+
+`rec`'s own x11 source, measured on the same box (2026-10-04) with Ghostty filling a 1920x1080 screen at an idle prompt: ffmpeg (x264 `fast`) used about 75 to 90% of one core, Ghostty 4 to 20%, Xvfb 6%, and the recorder itself, sampling the pointer at 30 Hz, under 1%. Xvfb plus ffmpeg's first frame takes about a second and a half. Dependency install time (around 40s per boot) is the biggest cost an agent pays, which is why install is a requirement below.
 
 ## Sources
 
@@ -27,7 +29,7 @@ A take records exactly one primary source.
 | kind | where | how it is captured |
 |---|---|---|
 | `tty` | Linux, macOS | `rec` spawns the command in a PTY it owns and records the output byte stream with timestamps. No display needed. Rendered to pixels at export. |
-| `x11` | Linux | `rec` starts Xvfb at a given size, the agent (or `rec`) launches apps into it, and it is captured with x11grab. Covers GUI apps and real terminal emulators like Ghostty. |
+| `x11` | Linux | `rec` starts Xvfb at a given size, the agent (or `rec`) launches apps into it, and it is captured with x11grab into H.264. Covers GUI apps and real terminal emulators like Ghostty. |
 | `display`, `window` | macOS | ScreenCaptureKit. Implemented. |
 
 Terminal programs should use `tty`. It is lossless, re-renders at any size and theme, and costs almost nothing during capture. Use `x11` only when the window chrome or a GUI is the point.
@@ -39,7 +41,7 @@ Camera and mic are optional tracks, available only where the devices exist (macO
 In a microVM, nobody else can type. `rec` sends input to the source it owns, and logs every input it sends into the timeline with an exact timestamp. Those logged events feed click highlights, typing effects, and later auto-zoom. This replaces macOS input monitoring for these sources.
 
 - `tty` input is written to the PTY.
-- `x11` input goes through XTEST (what xdotool uses).
+- `x11` input goes through XTEST (what xdotool uses), sent by `rec` over its own X connection, so xdotool is not needed.
 - On macOS sources, `rec` only observes the cursor and clicks, as it does today.
 
 ## Take folder
@@ -49,6 +51,7 @@ In a microVM, nobody else can type. `rec` sends input to the source it owns, and
   take.json        manifest (written at start, finalized at stop)
   term.cast        tty only: asciicast v2 output stream
   screen.mp4       x11 / macOS: H.264, no audio        (screen.mov on macOS)
+  screen-<t>.png   x11: written by `rec screen` with no --png path
   cam.mov          H.264 webcam                         (macOS, absent with --no-cam)
   mic.m4a          AAC microphone                       (macOS, absent with --no-mic)
   timeline.json    events on the take clock             (written at stop)
@@ -111,7 +114,7 @@ With the camera on, t0 waits until the webcam's exposure has settled (a lit pict
 }
 ```
 
-`t` is seconds on the take clock. `x` and `y` are normalized 0..1 relative to the source's frame, top-left origin, so they survive any crop or resolution. For `tty` they are cell-center coordinates normalized to the grid. Cursor is sampled at 30 Hz and written only when it moves.
+`t` is seconds on the take clock. `x` and `y` are normalized 0..1 relative to the source's frame, top-left origin, so they survive any crop or resolution: on `x11`, pixel `x` of a `width`-pixel screen is `x / width`, rounded to six places. For `tty` they are cell-center coordinates normalized to the grid. Cursor is sampled at 30 Hz and written only when it moves; on `x11` the recorder reads the pointer with QueryPointer, and the first sample is where the pointer starts.
 
 `type` and `key` events record only input that `rec` itself sent. Keystrokes a human types on macOS are never recorded. `rec type --secret` still sends the text but logs it as redacted.
 
@@ -122,30 +125,31 @@ All output is a single JSON object on stdout. Human-readable progress goes to st
 ### Recording
 
 - `rec start --tty [--size 120x36 | --for <layout>] -- <cmd...>` spawns `<cmd>` in a PTY under a background recorder and returns once it is recording: `{"take", "pid"}`. The take finishes when `rec stop` runs or the command exits. The grid defaults to 120x36. `--for 9:16` or `--for 16:9` picks the grid whose panel fills that layout's canvas at a legible size in the embedded font, so exporting to that layout fits with no crop and no empty bands beyond the margin: 53x45 for 9:16 (about 30px text on a 1080-wide frame) and 124x29 for 16:9. Passing both `--size` and `--for` fails with `bad_args`.
-- `rec start --x11 [--size 1920x1080] [-- <cmd...>]` starts Xvfb and the recorder, optionally launches `<cmd>` with `DISPLAY` set, and returns `{"take", "pid", "display": ":99"}` so the agent can launch more apps into it.
+- `rec start --x11 [--size 1920x1080 | --for <layout>] [-- <cmd...>]` starts Xvfb on the first free display from `:99` (one with neither `/tmp/.X<n>-lock` nor `/tmp/.X11-unix/X<n>`), starts ffmpeg's x11grab on it, optionally launches `<cmd>` with `DISPLAY` set, and returns `{"take", "pid", "display": ":99"}` so the agent can launch more apps into it. It returns once ffmpeg is writing frames and, when it launched `<cmd>`, once that app has mapped a window, because input sent before then goes nowhere. There is no window manager, so `rec` moves and sizes the app's first window to cover the screen. The screen defaults to 1920x1080 and needs even sides. `--for 9:16` or `--for 16:9` picks the screen that fills that layout's canvas inside its margin pixel for pixel, so that export fits with no scaling: 1000x1840 for 9:16 and 1776x936 for 16:9. The recorder owns three children, Xvfb, ffmpeg, and the app, and the take finishes when `rec stop` runs or the app exits. Capture is `ffmpeg -f x11grab -framerate 30 -draw_mouse 1` into libx264 (`fast` preset) yuv420p; the screen track's `offset` is the first frame's timestamp, read from ffmpeg, on the take clock.
 - `rec start [--display <id> | --window <id> | --app <name>] [--no-cam] [--no-mic] [--no-preview]` is the macOS form. It is implemented, and the default source there is the main display.
 - All `start` forms accept `--out <dir>`.
 - `rec record --duration <seconds> [same flags as start]` records in the foreground until the duration ends, the command exits, or SIGINT. `rec start` spawns this same command detached, so there is one recording code path.
-- `rec stop` stops the active recorder, waits for files to finalize, tears down anything `rec` started (PTY child, Xvfb), and prints the finished take.json.
-- `rec status` prints `{"recording": true, "take", "elapsed", "source"}` or `{"recording": false}`.
+- `rec stop` stops the active recorder, waits for files to finalize, tears down anything `rec` started (PTY child; on `x11`, ffmpeg first so screen.mp4 ends with the app still on screen, then the app, then Xvfb and its lock files), and prints the finished take.json. The same teardown runs when the app exits, on SIGINT, SIGTERM, or SIGHUP, and when starting fails partway. When the recorder is killed outright, ffmpeg and the app die with it on Linux (PR_SET_PDEATHSIG), but Xvfb ignores that, so the next `rec` command finds the stale record and stops it.
+- `rec status` prints `{"recording": true, "take", "elapsed", "source", "display"?}` or `{"recording": false}`. `display` is present on `x11`.
 - `rec mark <label>` adds a marker at the current moment: `{"take", "t", "label"}`. Each line of markers.jsonl is `{"t", "label"}`.
 
 ### Driving and observing (tty, x11)
 
-- `rec type <text> [--delay <ms>] [--secret]` types text at a human-looking pace (default 40 ms per character).
-- `rec key <combo>` sends a key or chord, such as `Return`, `ctrl+c`, or `alt+tab`.
-- `rec click <x> <y> [--button left]` and `rec move <x> <y>` work on `x11` only. Coordinates are pixels of the source frame.
-- `rec wait --text <regex> [--new] [--timeout <s>]` blocks until the current screen matches the pattern, so agents wait on output instead of sleeping. It prints `{"matched": true, "t"}`, or exits with error `timeout`. On `tty` it matches the emulated screen. On `x11` it needs OCR and comes later.
+- `rec type <text> [--delay <ms>] [--secret]` types text at a human-looking pace (default 40 ms per character). On `x11` each character becomes its keysym and is pressed on the keycode the keyboard map gives it, with shift when the keysym is the key's shifted one. Characters the map lacks (`é`, `✔`) go on spare, empty keycodes for the duration of the run, xdotool's technique, and all of a run's missing characters are mapped in one change before typing starts, because clients reload their keymap on each change and can drop a keystroke while they do.
+- `rec key <combo>` sends a key or chord, such as `Return`, `ctrl+c`, or `alt+tab`. Modifiers are `ctrl`, `alt`, `shift`, and `super`, and key names are `Return`/`Enter`, `Tab`, `Escape`, `BackSpace`, `Space`, `Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`, `PageDown`, `Delete`, `F1` to `F12`, or a single character, one table for both sources. `shift` and `super` only combine on `x11`; on `tty`, type the shifted character. A letter under `ctrl`, `alt`, or `super` is its lowercase key on both, so `ctrl+C` is `ctrl+c`.
+- `rec click <x> <y> [--button left|middle|right]` and `rec move <x> <y>` work on `x11` only, and fail with `not_supported` on `tty`. Coordinates are pixels of the screen; a point off the screen fails with `bad_args`. A click is logged as `{"type": "click", "x", "y", "button"}` with normalized coordinates. A move is not logged itself; the cursor samples record it.
+- `rec wait --text <regex> [--new] [--timeout <s>]` blocks until the current screen matches the pattern, so agents wait on output instead of sleeping. It prints `{"matched": true, "t"}`, or exits with error `timeout`. On `tty` it matches the emulated screen. On `x11` it needs OCR, which comes later, and fails with `not_supported`.
+- `rec wait --idle <seconds> [--timeout <s>]` blocks until nothing has changed for that long, measured from when the wait starts, and prints `{"idle": true, "t"}`, or exits with error `timeout` (default 30s). On `tty` a change is any output from the program. On `x11` the recorder hashes the whole screen (GetImage) about ten times a second, and a change is a picture that differs from both of the last two distinct pictures, so a blinking cursor toggling between two pictures does not count. Agents use it in place of guessed sleeps: `rec start --x11 -- ghostty; rec wait --idle 1; rec type ...`.
   - `--new` (`tty` only) matches the program's output since the last `type` or `key` instead of the screen, so the echo of a command typed earlier does not count. The recorder marks its output stream just before each input byte reaches the PTY, and `--new` matches everything written after that mark, as plain text with escape sequences and carriage returns removed. Output that arrived between the input and the start of the wait still counts, so `rec key Return; rec wait --new` has no race, and repeating the wait gives the same answer. With no input sent yet, it covers all output so far. The recorder holds the last 1 MiB of output text.
-- `rec screen [--png <path>]` prints what is on screen now: `{"text", "cols", "rows", "cursor"}` for `tty`, or writes a PNG and prints `{"png"}`. This is how the agent checks its work mid-take.
+- `rec screen [--png <path>]` prints what is on screen now: `{"text", "cols", "rows", "cursor"}` for `tty`. On `x11` it writes a PNG of the whole screen (GetImage of the root window) to `<path>`, or to `<take>/screen-<t>.png` without one, and prints `{"png", "width", "height", "t"}`. This is how the agent checks its work mid-take. `--png` on `tty` fails with `not_supported` for now; rendering the grid through the export renderer is the follow-up.
 
 Each driving command records itself in the timeline and returns `{"t"}` on the take clock.
 
 ### Composing and delivering
 
-- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--tighten [--plan-out <file>]] [--plan <file>] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "path", "width", "height", "duration", "url"?, "tightened"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows and `follow` when 9:16 crops a wide grid to a panning window (see Export). `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export. `--tighten --plan-out` writes that edit as a plan file instead of rendering, and `--plan` renders with an edited plan (see Plans).
-- `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`.
-- `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first.
+- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--tighten [--plan-out <file>]] [--plan <file>] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "path", "width", "height", "duration", "url"?, "tightened"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows and `follow` when 9:16 crops a wide grid to a panning window (see Export). `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export. Tighten reads the terminal stream, so `--tighten`, `--plan-out`, and `--plan` fail with `not_supported` on an `x11` take; a pixel-diff tighten is a later step. `--tighten --plan-out` writes that edit as a plan file instead of rendering, and `--plan` renders with an edited plan (see Plans).
+- `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`. `x11` is true when `Xvfb` and `ffmpeg` are on `PATH`.
+- `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first. Its `sources.x11` is `{"ok", "needs": ["Xvfb", "ffmpeg"], "missing"}`, and a missing `Xvfb` also appears in the top-level `missing`.
 
 The VM, and the take folder with it, is gone when the session ends, so delivery is part of export. `--upload` streams each finished export to its target and adds the `url` it can be fetched from. The target is one of:
 
@@ -160,7 +164,7 @@ If two takes start in the same second, the second folder gets a `-2` suffix.
 
 Commands are idempotent where it matters. `start` while recording returns an error naming the active take. `stop` with nothing recording returns `{"recording": false}`. A stale active record (pid no longer alive) is cleaned up silently, along with any Xvfb it left behind.
 
-Active state lives in `active.json`, holding `{"pid", "take", "startedAt", "source", "display"?}`. It is in `~/Library/Application Support/rec/` on macOS and `$XDG_STATE_HOME/rec/` (falling back to `~/.local/state/rec/`) on Linux.
+Active state lives in `active.json`, holding `{"pid", "take", "startedAt", "source", "display"?}`. A stale record with a `display` also has that display's Xvfb stopped, if it still runs, and its lock and socket files removed. It is in `~/Library/Application Support/rec/` on macOS and `$XDG_STATE_HOME/rec/` (falling back to `~/.local/state/rec/`) on Linux.
 
 ## Install
 
@@ -180,6 +184,8 @@ Layouts are data: a table of presets keyed by aspect, each giving the canvas siz
 
 - `16:9` is 1920x1080. The screen is fit inside with a small margin on a dark background. The camera, if present, is a circle in the bottom-right corner.
 - `9:16` is 1080x1920, and the terminal always fills it. Each export picks a viewport from the grid's shape. A grid whose fitted panel covers at least three quarters of the height, like one recorded with `--for 9:16`, is fit whole (`fit`). A wider grid would shrink to a strip with empty bands above and below, so instead its rows fill the height and a window as wide as the frame, inside a 40px margin, crops the columns (`follow`). A 100x30 take shows about 37 columns at a 45px font this way. The window pans to follow the action: the cursor when the program shows it, and otherwise the cells that gained ink since the previous frame, which covers TUIs that hide the cursor. Focus inside the window, clear of a margin of a sixth of its width, does not move it, so typing a few characters holds still. When focus leaves, the window recenters on it, or starts at the left end of new ink wider than the window. It glides there on a critically damped spring that settles in about half a second, stays inside the grid, and holds still on idle frames. Its position depends only on the frames before it, so re-exports match. The camera, if present, is a large circle in the lower portion. Without a camera, the screen gets the full height.
+
+`x11` takes are decoded at export (`ffmpeg -i screen.mp4 -f rawvideo -pix_fmt rgba -`) and scaled bilinearly into the layout, starting at the screen track's first frame. They pick a viewport by the same rule as a grid: a screen whose fitted picture covers at least three quarters of the height is fit whole (`fit`), which covers 16:9 always and 9:16 for a portrait screen; a landscape screen on 9:16 is scaled to fill the height and cropped by a window as wide as the frame inside its margin (`follow`). The window uses the same camera as a terminal, in surface pixels instead of columns. The pointer, from the timeline's cursor and click events, plays the cursor's part. The ink is everything that has changed on screen since the last `type` or `key`, counted only within half a second (plus 50 ms per typed character) after it, so the window follows the echo of what was typed but not a cursor blinking elsewhere, and a title bar redrawn after the prompt widens the ink rather than pulling the window off the prompt. The first frame starts on the pointer, or the middle of the screen, with no glide.
 
 `tty` takes are rendered at export. The cast is replayed through a terminal emulator (libghostty-vt is the intended engine) onto a canvas. Font, theme, and pixel scale are export choices. The grid (cols x rows) is fixed when the take is recorded, because the program laid out its output for that size. A take meant for vertical video records with `--for 9:16`, so 9:16 shows every column instead of panning. Typed input from the timeline can drive a typing highlight.
 
@@ -240,9 +246,9 @@ An export opens at the latest video track offset, the first moment every video t
 
 1. `tty` end to end: `rec start --tty`, `type`, `key`, `wait`, `screen`, `stop`, rendering the cast to frames, and export to MP4 inside a Vercel Sandbox. This alone covers herdr, Claude Code mods, and CLI demos.
 2. The portable compositor with layouts and the border, replacing the CoreImage exporter. Upload.
-3. The `x11` source: Xvfb lifecycle, x11grab, XTEST input, `rec screen --png`.
+3. The `x11` source: Xvfb lifecycle, x11grab, XTEST input, `rec screen --png`. Done, along with `rec wait --idle` for both sources.
 4. The macOS capture backend writes version 2 takes and uses the shared exporter.
-5. Later: OCR for `rec wait` on `x11`, auto-zoom on clicks, blur of sensitive regions, transcription and summary, TTS narration, a Claude Code mod, Wayland.
+5. Later: OCR for `rec wait` on `x11`, pixel-diff `--tighten` for `x11`, `rec screen --png` on `tty`, auto-zoom on clicks, blur of sensitive regions, transcription and summary, TTS narration, a Claude Code mod, Wayland.
 
 ## Open decisions
 
