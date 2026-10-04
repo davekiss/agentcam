@@ -10,8 +10,9 @@ use serde::Serialize;
 /// Something that happened on the take clock.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Point {
-    /// Input `rec` sent. `chars` is how many characters a `type` sent, which stretches its echo.
-    Input { t: f64, chars: usize },
+    /// Input `rec` sent. `typed` is the text a `type` sent: it stretches the echo, and the
+    /// viewer watched it appear, so it needs no reading time later.
+    Input { t: f64, typed: String },
     /// The screen at the end of one export frame differs from the frame before.
     Change { t: f64, kind: Change, text: String },
 }
@@ -132,9 +133,12 @@ pub fn analyze(
         .filter_map(|e| match &e.event {
             Event::Type { text, .. } => Some(Point::Input {
                 t: e.t,
-                chars: text.as_ref().map_or(0, |s| s.chars().count()),
+                typed: text.clone().unwrap_or_default(),
             }),
-            Event::Key { .. } => Some(Point::Input { t: e.t, chars: 0 }),
+            Event::Key { .. } => Some(Point::Input {
+                t: e.t,
+                typed: String::new(),
+            }),
             Event::Marker { .. } => None,
         })
         .collect();
@@ -207,10 +211,14 @@ pub fn segment(points: &[Point], duration: f64) -> Vec<Segment> {
     let mut echo_until = f64::NEG_INFINITY;
     let mut active: Vec<(f64, Role)> = Vec::new();
     let mut text_at: Vec<(f64, &str)> = Vec::new();
+    let mut typed_at: Vec<(f64, &str)> = Vec::new();
     for p in points {
         match p {
-            Point::Input { t, chars } => {
-                echo_until = echo_until.max(t + ECHO + ECHO_PER_CHAR * *chars as f64);
+            Point::Input { t, typed } => {
+                typed_at.push((*t, typed));
+                let chars = typed.chars().count();
+                // `rec` sends inputs one at a time, so a new input ends the echo of the last.
+                echo_until = t + ECHO + ECHO_PER_CHAR * chars as f64;
                 active.push((*t, Role::Input));
             }
             Point::Change { t, kind, text } => {
@@ -274,8 +282,12 @@ pub fn segment(points: &[Point], duration: f64) -> Vec<Segment> {
     }
 
     let mut read = Read::default();
+    let mut typed = typed_at.iter().peekable();
     for seg in segs.iter_mut() {
         if matches!(seg.kind, Kind::Busy | Kind::Settled | Kind::End) {
+            while let Some((_, text)) = typed.next_if(|(t, _)| *t <= seg.take.0) {
+                read.show(text);
+            }
             let shown = match text_at.partition_point(|(t, _)| *t <= seg.take.0) {
                 0 => "",
                 n => text_at[n - 1].1,
@@ -452,7 +464,10 @@ mod tests {
     use super::*;
 
     fn input(t: f64) -> Point {
-        Point::Input { t, chars: 0 }
+        Point::Input {
+            t,
+            typed: String::new(),
+        }
     }
 
     fn change(t: f64, kind: Change, text: &str) -> Point {
@@ -473,7 +488,10 @@ mod tests {
         let mut points = vec![
             content(0.8, "Welcome to the app"),
             content(2.5, "Welcome to the app tips: press enter"),
-            Point::Input { t: 13.2, chars: 4 },
+            Point::Input {
+                t: 13.2,
+                typed: "help".into(),
+            },
             content(13.3, "help"),
             input(15.2),
             content(15.25, "Do you want to continue? yes no"),
