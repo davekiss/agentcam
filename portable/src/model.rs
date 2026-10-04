@@ -111,6 +111,16 @@ pub struct Timeline {
     pub events: Vec<TimedEvent>,
 }
 
+impl Timeline {
+    pub fn read(dir: &Path) -> Result<Timeline> {
+        let path = dir.join(TIMELINE_FILE);
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| RecError::new("not_found", format!("{}: {e}", path.display())))?;
+        serde_json::from_str(&raw)
+            .map_err(|e| RecError::new("bad_timeline", format!("{}: {e}", path.display())))
+    }
+}
+
 /// One line of markers.jsonl.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Marker {

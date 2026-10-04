@@ -77,6 +77,9 @@ enum Cmd {
         /// Draw the risograph attention border.
         #[arg(long)]
         border: bool,
+        /// Retime the take so its pacing follows the app: cut dead air, compress waits.
+        #[arg(long)]
+        tighten: bool,
         /// `blob` or `blob:private` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN), or a presigned https:// PUT URL.
         #[arg(long)]
         upload: Option<String>,
@@ -172,8 +175,17 @@ fn run(cmd: Cmd) -> Result<Value> {
             theme,
             font_size,
             border,
+            tighten,
             upload,
-        } => export(&take, layouts, &theme, font_size, border, upload.as_deref()),
+        } => export(
+            &take,
+            layouts,
+            &theme,
+            font_size,
+            border,
+            tighten,
+            upload.as_deref(),
+        ),
         Cmd::Doctor => Ok(doctor()),
         Cmd::Sources => Ok(json!({ "tty": true, "x11": false })),
     }
@@ -374,6 +386,7 @@ fn export(
     theme: &str,
     font_px: Option<f32>,
     border: bool,
+    tighten: bool,
     upload: Option<&str>,
 ) -> Result<Value> {
     let upload = upload
@@ -405,6 +418,7 @@ fn export(
             theme,
             font_px,
             border,
+            tighten,
         },
     )?;
     let take_id = paths::take_id(&dir);

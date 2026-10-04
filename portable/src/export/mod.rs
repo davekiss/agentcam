@@ -4,6 +4,7 @@ mod border;
 mod camera;
 pub mod layout;
 mod render;
+pub mod tighten;
 pub mod theme;
 mod view;
 
@@ -21,6 +22,7 @@ pub struct ExportOptions {
     pub theme: &'static theme::Theme,
     pub font_px: Option<f32>,
     pub border: bool,
+    pub tighten: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +34,8 @@ pub struct Export {
     pub width: u32,
     pub height: u32,
     pub duration: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tightened: Option<tighten::Tightened>,
 }
 
 pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
@@ -53,7 +57,16 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
     };
     let ffmpeg = find_ffmpeg()?;
     let fonts = render::Fonts::load();
-    let frames = ((duration * FPS as f64).round() as u64).max(1);
+    let (map, tightened) = if opts.tighten {
+        let timeline = model::Timeline::read(dir)?;
+        let points = tighten::analyze(&cast.output, &timeline.events, size, duration);
+        let segments = tighten::segment(&points, duration);
+        let (map, report) = tighten::plan(&segments, &tighten::POLICY, duration);
+        (map, Some(report))
+    } else {
+        (tighten::TimeMap::identity(duration), None)
+    };
+    let frames = ((map.duration() * FPS as f64).round() as u64).max(1);
 
     let mut out = Vec::new();
     for preset in &opts.layouts {
@@ -75,7 +88,7 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
         let mut next = 0;
         for f in 0..frames {
             // Each frame shows the screen as of the end of its interval.
-            let t = (f + 1) as f64 / FPS as f64;
+            let t = map.take_time((f + 1) as f64 / FPS as f64);
             let mut changed = f == 0;
             while let Some((_, data)) = cast.output.get(next).filter(|(at, _)| *at <= t) {
                 parser.process(data.as_bytes());
@@ -106,6 +119,7 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
             width: preset.width,
             height: preset.height,
             duration: model::round_t(frames as f64 / FPS as f64),
+            tightened: tightened.clone(),
         });
     }
     Ok(out)
