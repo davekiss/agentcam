@@ -143,7 +143,7 @@ Each driving command records itself in the timeline and returns `{"t"}` on the t
 
 ### Composing and delivering
 
-- `rec export <take> [--layout 16:9] [--layout 9:16] [--no-border] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "path", "width", "height", "duration", "url"?}]}`. With no `--layout`, it exports both. `url` is present only with `--upload`.
+- `rec export <take> [--layout 16:9] [--layout 9:16] [--border] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "path", "width", "height", "duration", "url"?}]}`. With no `--layout`, it exports both. `url` is present only with `--upload`.
 - `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`.
 - `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first.
 
@@ -183,7 +183,7 @@ Layouts are data: a table of presets keyed by aspect, each giving the canvas siz
 
 `tty` takes are rendered at export. The cast is replayed through a terminal emulator (libghostty-vt is the intended engine) onto a canvas. Font, theme, and pixel scale are export choices. The grid (cols x rows) is fixed when the take is recorded, because the program laid out its output for that size, so an agent that wants a legible 9:16 records at a narrow size such as `--size 60x40`. Typed input from the timeline can drive a typing highlight.
 
-The attention border is a risograph ring around the camera circle, or around the screen when there is no camera: one grainy ring per spot ink (fluorescent pink, riso blue, yellow), each on its own plate, multiplied where they overlap. Its look at time t is a pure function. In the intro, from 0 to about 1.5s, the plates start far out of register, snap into place by 0.75s, and kick apart once on the beat. After that, a thin ring stays slightly misregistered and boils, wobbling at 10 fps. `--no-border` turns it off.
+The attention border is a risograph ring around the camera circle, or around the screen when there is no camera: one grainy ring per spot ink (fluorescent pink, riso blue, yellow), each on its own plate, multiplied where they overlap. Its look at time t is a pure function. In the intro, from 0 to about 1.5s, the plates start far out of register, snap into place by 0.75s, and kick apart once on the beat. After that, a thin ring stays slightly misregistered and boils, wobbling at 10 fps. The border is off by default, and `--border` turns it on.
 
 An export opens at the latest video track offset, the first moment every video track has a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.
 

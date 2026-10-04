@@ -74,9 +74,9 @@ enum Cmd {
         /// Font size in pixels. Defaults to the largest that fits.
         #[arg(long)]
         font_size: Option<f32>,
-        /// Leave out the attention border.
+        /// Draw the risograph attention border.
         #[arg(long)]
-        no_border: bool,
+        border: bool,
         /// `blob` or `blob:private` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN), or a presigned https:// PUT URL.
         #[arg(long)]
         upload: Option<String>,
@@ -158,9 +158,9 @@ fn run(cmd: Cmd) -> Result<Value> {
             layouts,
             theme,
             font_size,
-            no_border,
+            border,
             upload,
-        } => export(&take, layouts, &theme, font_size, !no_border, upload.as_deref()),
+        } => export(&take, layouts, &theme, font_size, border, upload.as_deref()),
         Cmd::Doctor => Ok(doctor()),
         Cmd::Sources => Ok(json!({ "tty": true, "x11": false })),
     }

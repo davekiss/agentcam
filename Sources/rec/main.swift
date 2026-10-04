@@ -129,11 +129,11 @@ struct Export: ParsableCommand, AsyncCommand {
     static let configuration = CommandConfiguration(abstract: "Compose a take into 16:9 and/or 9:16 MP4s.")
     @Argument(help: "Path to the take folder.") var take: String
     @Option(help: "16:9 or 9:16; repeat for both (default both).") var layout: [Aspect] = []
-    @Flag(help: "Do not draw the attention border.") var noBorder = false
+    @Flag(help: "Draw the attention border.") var border = false
 
     func execute() async throws {
         let aspects = layout.isEmpty ? Aspect.allCases : Aspect.allCases.filter(layout.contains)
-        Output.emit(try await Exporter.export(take: URL(fileURLWithPath: take), aspects: aspects, border: !noBorder))
+        Output.emit(try await Exporter.export(take: URL(fileURLWithPath: take), aspects: aspects, border: border))
     }
 }
 

@@ -1,6 +1,6 @@
 # rec
 
-A native macOS screen recorder built for agents. Every command prints one JSON object to stdout, so a script or an agent can drive a take and read the result. Recording and composing are separate: `rec` records the raw screen, webcam, mic, and cursor data, and `rec export` turns one take into 16:9 and 9:16 videos with a webcam bubble and an animated border.
+A native macOS screen recorder built for agents. Every command prints one JSON object to stdout, so a script or an agent can drive a take and read the result. Recording and composing are separate: `rec` records the raw screen, webcam, mic, and cursor data, and `rec export` turns one take into 16:9 and 9:16 videos with a webcam bubble and an optional animated border.
 
 [SPEC.md](SPEC.md) is the contract for the take folder, the JSON shapes, and the commands. It also covers where `rec` is headed: agents recording terminals and apps from inside headless Linux microVMs such as Vercel Sandbox. This README documents the macOS recorder that exists today.
 
@@ -49,7 +49,7 @@ Compose a take. With no `--layout` it writes both:
 
 ```sh
 rec export ~/Movies/rec/take-20261002-213501
-rec export ~/Movies/rec/take-20261002-213501 --layout 9:16 --no-border
+rec export ~/Movies/rec/take-20261002-213501 --layout 9:16 --border
 ```
 
 ## The take folder

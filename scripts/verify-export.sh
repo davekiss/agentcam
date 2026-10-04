@@ -32,7 +32,7 @@ verify_take() {
   local name=$1; shift
   local take="$work/$name"
   "$root/scripts/make-fixture-take.sh" "$take" "$@" >/dev/null
-  "$rec" export "$take" > "$take/export.json"
+  "$rec" export "$take" --border > "$take/export.json"
 
   for layout in 16x9 9x16; do
     local mp4="$take/export-$layout.mp4"
