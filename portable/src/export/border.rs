@@ -220,10 +220,15 @@ impl Target {
         let wander = (look.spread + BOIL_JITTER * std::f64::consts::SQRT_2) as f32 * u + 2.0;
         let plates: [(f32, f32, [f32; 3]); 3] = std::array::from_fn(|i| {
             let (dx, dy) = plate_offset(i, look);
-            (dx as f32 * u, -dy as f32 * u, INKS[i].rgb)
+            (
+                dx as f32 * u,
+                -dy as f32 * u,
+                INKS[i].rgb.map(srgb_to_linear),
+            )
         });
         let grains: [Grain; 3] = std::array::from_fn(|i| Grain::new(i, look.boil_frame));
         let fade = look.opacity as f32;
+        let lin = Linear::get();
 
         let [l, t, r, b] = self.shape.bounds();
         let reach = outer + wander;
@@ -263,8 +268,8 @@ impl Target {
                 if a > 0.0 {
                     let p = row + x as usize * 4;
                     for c in 0..3 {
-                        let under = buf[p + c] as f32;
-                        buf[p + c] = (under + (ink[c] * 255.0 - under) * a).round() as u8;
+                        let under = lin.decode[buf[p + c] as usize];
+                        buf[p + c] = lin.encode(under + (ink[c] - under) * a);
                     }
                 }
                 x += 1;
@@ -273,13 +278,55 @@ impl Target {
     }
 }
 
+/// Core Image composites in linear light, so the inks multiply and blend in linear here too;
+/// in gamma space, half-covered grain reads as half-dark instead of mostly inked.
+struct Linear {
+    decode: [f32; 256],
+    encode: Vec<u8>,
+}
+
+const ENCODE_STEPS: usize = 4096;
+
+impl Linear {
+    fn get() -> &'static Linear {
+        static LUT: std::sync::OnceLock<Linear> = std::sync::OnceLock::new();
+        LUT.get_or_init(|| Linear {
+            decode: std::array::from_fn(|i| srgb_to_linear(i as f32 / 255.0)),
+            encode: (0..=ENCODE_STEPS)
+                .map(|i| (linear_to_srgb(i as f32 / ENCODE_STEPS as f32) * 255.0).round() as u8)
+                .collect(),
+        })
+    }
+
+    fn encode(&self, v: f32) -> u8 {
+        self.encode[(ramp(v) * ENCODE_STEPS as f32).round() as usize]
+    }
+}
+
+fn srgb_to_linear(v: f32) -> f32 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(v: f32) -> f32 {
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 fn ramp(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
 }
 
 /// Speckled ink coverage: mostly solid with pinhole voids, reshuffled on every boil step.
-/// Bilinear value noise on a 1.6px lattice, contrast-stretched and clamped, as the macOS
-/// `CIRandomGenerator` chain does.
+/// Bilinear value noise on a 1.6px lattice, contrast-stretched and clamped like the macOS
+/// `CIRandomGenerator` chain. That chain, rendered through Core Image, leaves about 4.6% of
+/// pixels void and 85% solid; the thresholds below reproduce those fractions for this noise.
 struct Grain {
     ox: f32,
     oy: f32,
@@ -287,8 +334,8 @@ struct Grain {
 }
 
 const GRAIN_SCALE: f32 = 1.6;
-const GRAIN_GAIN: f32 = 5.0;
-const GRAIN_FLOOR: f32 = 0.32;
+const GRAIN_VOID: f32 = 0.175;
+const GRAIN_SOLID: f32 = 0.283;
 
 impl Grain {
     fn new(plate: usize, frame: i64) -> Grain {
@@ -307,7 +354,7 @@ impl Grain {
         let (ix, iy) = (fx as i64, fy as i64);
         let top = lerp(self.lattice(ix, iy), self.lattice(ix + 1, iy), tx);
         let bottom = lerp(self.lattice(ix, iy + 1), self.lattice(ix + 1, iy + 1), tx);
-        ramp(GRAIN_GAIN * (lerp(top, bottom, ty) - GRAIN_FLOOR))
+        ramp((lerp(top, bottom, ty) - GRAIN_VOID) / (GRAIN_SOLID - GRAIN_VOID))
     }
 
     fn lattice(&self, ix: i64, iy: i64) -> f32 {
@@ -514,6 +561,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn grain_is_mostly_solid_with_pinholes_like_core_image() {
+        let g = Grain::new(1, 42);
+        let samples: Vec<f32> = (0..256 * 256)
+            .map(|i| g.at((i % 256) as f32 + 0.5, (i / 256) as f32 + 0.5))
+            .collect();
+        let share = |f: fn(f32) -> bool| {
+            samples.iter().filter(|&&v| f(v)).count() as f32 / samples.len() as f32
+        };
+        let void = share(|v| v == 0.0);
+        let solid = share(|v| v == 1.0);
+        assert!((0.03..0.07).contains(&void), "void {void}");
+        assert!((0.80..0.90).contains(&solid), "solid {solid}");
+    }
+
+    #[test]
+    fn linear_light_round_trips_every_byte() {
+        let lin = Linear::get();
+        for b in 0..=255u8 {
+            assert_eq!(lin.encode(lin.decode[b as usize]), b);
+        }
+        assert!(
+            (lin.decode[128] - 0.2158).abs() < 1e-3,
+            "sRGB mid-gray is ~21.6% linear"
+        );
+    }
+
     fn frame(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
         [rgb[0], rgb[1], rgb[2], 255].repeat((w * h) as usize)
     }
@@ -555,7 +629,12 @@ mod tests {
             "ring is mostly solid: {inked}/{}",
             band.len()
         );
-        assert!(inked < band.len(), "ring has pinhole voids");
+        let shades: std::collections::HashSet<_> = band.iter().collect();
+        assert!(
+            shades.len() > 10,
+            "grain varies the ink: {} shades",
+            shades.len()
+        );
     }
 
     #[test]
