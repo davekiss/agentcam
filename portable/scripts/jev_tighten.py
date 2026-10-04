@@ -32,7 +32,7 @@ import urllib.request
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
-ENV_FILE = "/Users/davekiss/Code/Projects/rec/.env.local"
+ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env.local")
 PRICE_PER_MTOK_USD = 0.042  # docs.typesafe.ai/models: input tokens only, output is free.
 
 # One row per read_need level: (base seconds, seconds per unread word, cap seconds).
