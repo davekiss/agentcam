@@ -106,6 +106,12 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
     Ok(out)
 }
 
+/// The grid that fills `layout` at a legible size in the embedded font, for `--for`.
+pub fn grid_for(layout: &str) -> Result<model::Size> {
+    let preset = layout::preset(layout)?;
+    Ok(layout::grid_for(&preset, render::Fonts::load().cell_metrics()))
+}
+
 pub fn find_on_path(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     std::env::split_paths(&std::env::var_os("PATH")?)

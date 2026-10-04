@@ -92,9 +92,12 @@ struct RecordArgs {
     /// Record a command in a pseudo-terminal.
     #[arg(long, required = true)]
     tty: bool,
-    /// Terminal grid as COLSxROWS.
-    #[arg(long, default_value = "120x36")]
-    size: Size,
+    /// Terminal grid as COLSxROWS. Defaults to 120x36.
+    #[arg(long)]
+    size: Option<Size>,
+    /// Pick the grid that fills this export layout (16:9 or 9:16) at a legible size.
+    #[arg(long = "for", value_name = "LAYOUT", conflicts_with = "size")]
+    for_layout: Option<String>,
     /// Stop after this many seconds.
     #[arg(long)]
     duration: Option<f64>,
@@ -106,6 +109,16 @@ struct RecordArgs {
     take_dir: Option<PathBuf>,
     #[arg(last = true, required = true)]
     command: Vec<String>,
+}
+
+impl RecordArgs {
+    fn grid(&self) -> Result<Size> {
+        match (&self.for_layout, self.size) {
+            (Some(layout), _) => export::grid_for(layout),
+            (None, Some(size)) => Ok(size),
+            (None, None) => Ok(Size { cols: 120, rows: 36 }),
+        }
+    }
 }
 
 fn main() {
@@ -190,6 +203,7 @@ fn take_json(take: &Take) -> Value {
 }
 
 fn record(args: RecordArgs) -> Result<Value> {
+    let size = args.grid()?;
     let take_dir = match args.take_dir {
         Some(dir) => dir,
         None => {
@@ -202,7 +216,7 @@ fn record(args: RecordArgs) -> Result<Value> {
     };
     let take = recorder::record(recorder::RecordOptions {
         take_dir: take_dir.clone(),
-        size: args.size,
+        size,
         duration: args.duration,
         command: args.command,
     })?;
@@ -221,6 +235,7 @@ fn start(args: RecordArgs) -> Result<Value> {
     if let Some(a) = paths::read_active()? {
         return Err(paths::already_recording(&a));
     }
+    let size = args.grid()?;
     let out = args.out.clone().map_or_else(paths::default_out_dir, Ok)?;
     let dir = paths::create_take_dir(&out, chrono::Local::now())?;
     let log_path = dir.join(model::LOG_FILE);
@@ -230,7 +245,7 @@ fn start(args: RecordArgs) -> Result<Value> {
     let exe = std::env::current_exe().map_err(|e| RecError::io("locate rec binary", e))?;
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["record", "--tty", "--size"])
-        .arg(format!("{}x{}", args.size.cols, args.size.rows))
+        .arg(format!("{}x{}", size.cols, size.rows))
         .arg("--take-dir")
         .arg(&dir);
     if let Some(d) = args.duration {

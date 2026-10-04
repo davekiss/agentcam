@@ -121,7 +121,7 @@ All output is a single JSON object on stdout. Human-readable progress goes to st
 
 ### Recording
 
-- `rec start --tty [--size 120x36] -- <cmd...>` spawns `<cmd>` in a PTY under a background recorder and returns once it is recording: `{"take", "pid"}`. The take finishes when `rec stop` runs or the command exits.
+- `rec start --tty [--size 120x36 | --for <layout>] -- <cmd...>` spawns `<cmd>` in a PTY under a background recorder and returns once it is recording: `{"take", "pid"}`. The take finishes when `rec stop` runs or the command exits. The grid defaults to 120x36. `--for 9:16` or `--for 16:9` picks the grid whose panel fills that layout's canvas at a legible size in the embedded font, so exporting to that layout fits with no crop and no empty bands beyond the margin: 53x45 for 9:16 (about 30px text on a 1080-wide frame) and 124x29 for 16:9. Passing both `--size` and `--for` fails with `bad_args`.
 - `rec start --x11 [--size 1920x1080] [-- <cmd...>]` starts Xvfb and the recorder, optionally launches `<cmd>` with `DISPLAY` set, and returns `{"take", "pid", "display": ":99"}` so the agent can launch more apps into it.
 - `rec start [--display <id> | --window <id> | --app <name>] [--no-cam] [--no-mic] [--no-preview]` is the macOS form. It is implemented, and the default source there is the main display.
 - All `start` forms accept `--out <dir>`.
