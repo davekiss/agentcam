@@ -77,7 +77,7 @@ enum Cmd {
         /// Leave out the attention border.
         #[arg(long)]
         no_border: bool,
-        /// `blob` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN) or a presigned https:// PUT URL.
+        /// `blob` or `blob:private` (Vercel Blob, token in BLOB_READ_WRITE_TOKEN), or a presigned https:// PUT URL.
         #[arg(long)]
         upload: Option<String>,
     },

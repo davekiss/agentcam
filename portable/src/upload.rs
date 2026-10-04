@@ -19,9 +19,29 @@ const CONTENT_TYPE: &str = "video/mp4";
 #[derive(Debug, PartialEq)]
 pub enum Target {
     /// Vercel Blob, through the same single PUT that @vercel/blob's `put()` makes.
-    Blob { token: String, api: String },
+    Blob {
+        token: String,
+        api: String,
+        access: Access,
+    },
     /// One presigned PUT URL, as S3, R2, GCS, and Mux direct uploads hand out.
     Presigned { url: String, public: String },
+}
+
+/// Must match the store's own setting; the Blob API rejects a mismatch.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Access {
+    Public,
+    Private,
+}
+
+impl Access {
+    fn header(self) -> &'static str {
+        match self {
+            Access::Public => "public",
+            Access::Private => "private",
+        }
+    }
 }
 
 /// One export as `rec export` prints it, with `url` once it is uploaded.
@@ -35,7 +55,12 @@ pub struct Delivered<E> {
 
 impl Target {
     pub fn parse(target: &str, env: impl Fn(&str) -> Option<String>) -> Result<Target> {
-        if target == "blob" {
+        let access = match target {
+            "blob" => Some(Access::Public),
+            "blob:private" => Some(Access::Private),
+            _ => None,
+        };
+        if let Some(access) = access {
             let token = env(BLOB_TOKEN_VAR).filter(|t| !t.trim().is_empty()).ok_or_else(|| {
                 RecError::new(
                     "missing_credentials",
@@ -46,12 +71,13 @@ impl Target {
             return Ok(Target::Blob {
                 token: token.trim().to_string(),
                 api: api.trim_end_matches('/').to_string(),
+                access,
             });
         }
         let bad = || {
             RecError::new(
                 "bad_args",
-                format!("unknown upload target {target:?}; use blob or a presigned https:// URL"),
+                format!("unknown upload target {target:?}; use blob, blob:private, or a presigned https:// URL"),
             )
         };
         let uri: Uri = target.parse().map_err(|_| bad())?;
@@ -94,7 +120,7 @@ impl Target {
             .build()
             .into();
         match self {
-            Target::Blob { token, api } => {
+            Target::Blob { token, api, access } => {
                 let name = file.file_name().unwrap_or_default().to_string_lossy();
                 let pathname = format!("rec/{take_id}/{name}");
                 let store = token.split('_').nth(3).unwrap_or_default();
@@ -105,7 +131,7 @@ impl Target {
                     .header("x-api-blob-request-id", request_id(store))
                     .header("x-api-blob-request-attempt", "0")
                     .header("x-vercel-blob-store-id", store)
-                    .header("x-vercel-blob-access", "public")
+                    .header("x-vercel-blob-access", access.header())
                     .header("x-content-type", CONTENT_TYPE)
                     .header("x-add-random-suffix", "0")
                     // Re-exporting the same take replaces the file at the same URL.
@@ -216,7 +242,8 @@ mod tests {
             .unwrap(),
             Target::Blob {
                 token: "vercel_blob_rw_store1_secret".into(),
-                api: BLOB_API.into()
+                api: BLOB_API.into(),
+                access: Access::Public,
             }
         );
         assert_eq!(
@@ -230,9 +257,14 @@ mod tests {
             .unwrap(),
             Target::Blob {
                 token: "t".into(),
-                api: "http://127.0.0.1:9/api".into()
+                api: "http://127.0.0.1:9/api".into(),
+                access: Access::Public,
             }
         );
+        assert!(matches!(
+            Target::parse("blob:private", env(&[(BLOB_TOKEN_VAR, "t")])).unwrap(),
+            Target::Blob { access: Access::Private, .. }
+        ));
     }
 
     #[test]
