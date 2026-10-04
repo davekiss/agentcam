@@ -1,5 +1,6 @@
 //! `rec export`: replay term.cast through vt100 at 30 fps and encode with ffmpeg.
 
+mod border;
 pub mod layout;
 mod render;
 pub mod theme;
@@ -17,6 +18,7 @@ pub struct ExportOptions {
     pub layouts: Vec<layout::Preset>,
     pub theme: &'static theme::Theme,
     pub font_px: Option<f32>,
+    pub border: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,7 +63,10 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
         );
         let mut enc = Encoder::spawn(&ffmpeg, &path, preset.width, preset.height)?;
         let mut parser = vt100::Parser::new(size.rows, size.cols, 0);
-        let mut buf = vec![0u8; renderer.frame_len()];
+        let ring = opts.border.then(|| border::Target::screen(fit.panel));
+        let mut term = vec![0u8; renderer.frame_len()];
+        let mut framed = if ring.is_some() { term.clone() } else { Vec::new() };
+        let mut shown = None;
         let mut next = 0;
         let mut dirty = true;
         for f in 0..frames {
@@ -73,10 +78,21 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                 dirty = true;
             }
             if dirty {
-                renderer.render(parser.screen(), &mut buf);
-                dirty = false;
+                renderer.render(parser.screen(), &mut term);
             }
-            enc.write(&buf)?;
+            let Some(ring) = &ring else {
+                dirty = false;
+                enc.write(&term)?;
+                continue;
+            };
+            let look = border::look(f as f64 / FPS as f64);
+            if dirty || shown != Some(look) {
+                framed.copy_from_slice(&term);
+                ring.draw(&look, &mut framed, preset.width, preset.height);
+                shown = Some(look);
+            }
+            dirty = false;
+            enc.write(&framed)?;
         }
         enc.finish()?;
         out.push(Export {

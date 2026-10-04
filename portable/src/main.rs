@@ -69,6 +69,9 @@ enum Cmd {
         /// Font size in pixels. Defaults to the largest that fits.
         #[arg(long)]
         font_size: Option<f32>,
+        /// Leave out the attention border.
+        #[arg(long)]
+        no_border: bool,
     },
     /// Report the platform and what each source needs.
     Doctor,
@@ -147,7 +150,8 @@ fn run(cmd: Cmd) -> Result<Value> {
             layouts,
             theme,
             font_size,
-        } => export(&take, layouts, &theme, font_size),
+            no_border,
+        } => export(&take, layouts, &theme, font_size, !no_border),
         Cmd::Doctor => Ok(doctor()),
         Cmd::Sources => Ok(json!({ "tty": true, "x11": false })),
     }
@@ -334,7 +338,13 @@ fn wait(pattern: &str, timeout: f64) -> Result<Value> {
     }
 }
 
-fn export(take: &str, layouts: Vec<String>, theme: &str, font_px: Option<f32>) -> Result<Value> {
+fn export(
+    take: &str,
+    layouts: Vec<String>,
+    theme: &str,
+    font_px: Option<f32>,
+    border: bool,
+) -> Result<Value> {
     let dir = paths::resolve_take(take)?;
     let layouts = if layouts.is_empty() {
         export::layout::PRESETS.to_vec()
@@ -357,6 +367,7 @@ fn export(take: &str, layouts: Vec<String>, theme: &str, font_px: Option<f32>) -
             layouts,
             theme,
             font_px,
+            border,
         },
     )?;
     Ok(json!({ "take": dir, "exports": exports }))
