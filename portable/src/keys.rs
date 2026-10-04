@@ -1,4 +1,5 @@
-//! Key combos (`Return`, `ctrl+c`, `alt+x`) to the bytes an xterm-compatible terminal sends.
+//! Key combos (`Return`, `ctrl+c`, `alt+x`): the bytes an xterm-compatible terminal sends, and
+//! the keysyms an x11 source presses. One grammar and one table of names serve both.
 
 use crate::error::{RecError, Result};
 
@@ -16,49 +17,72 @@ enum Seq {
     Cursor(&'static [u8], &'static [u8]),
 }
 
-const NAMED: &[(&str, Seq)] = &[
-    ("return", Seq::Fixed(b"\r")),
-    ("enter", Seq::Fixed(b"\r")),
-    ("tab", Seq::Fixed(b"\t")),
-    ("escape", Seq::Fixed(b"\x1b")),
-    ("esc", Seq::Fixed(b"\x1b")),
-    ("backspace", Seq::Fixed(b"\x7f")),
-    ("space", Seq::Fixed(b" ")),
-    ("up", Seq::Cursor(b"\x1b[A", b"\x1bOA")),
-    ("down", Seq::Cursor(b"\x1b[B", b"\x1bOB")),
-    ("right", Seq::Cursor(b"\x1b[C", b"\x1bOC")),
-    ("left", Seq::Cursor(b"\x1b[D", b"\x1bOD")),
-    ("home", Seq::Cursor(b"\x1b[H", b"\x1bOH")),
-    ("end", Seq::Cursor(b"\x1b[F", b"\x1bOF")),
-    ("pageup", Seq::Fixed(b"\x1b[5~")),
-    ("pagedown", Seq::Fixed(b"\x1b[6~")),
-    ("delete", Seq::Fixed(b"\x1b[3~")),
-    ("f1", Seq::Fixed(b"\x1bOP")),
-    ("f2", Seq::Fixed(b"\x1bOQ")),
-    ("f3", Seq::Fixed(b"\x1bOR")),
-    ("f4", Seq::Fixed(b"\x1bOS")),
-    ("f5", Seq::Fixed(b"\x1b[15~")),
-    ("f6", Seq::Fixed(b"\x1b[17~")),
-    ("f7", Seq::Fixed(b"\x1b[18~")),
-    ("f8", Seq::Fixed(b"\x1b[19~")),
-    ("f9", Seq::Fixed(b"\x1b[20~")),
-    ("f10", Seq::Fixed(b"\x1b[21~")),
-    ("f11", Seq::Fixed(b"\x1b[23~")),
-    ("f12", Seq::Fixed(b"\x1b[24~")),
+/// Every named key once: what a tty receives, and the X11 keysym an x11 source presses.
+const NAMED: &[(&str, Seq, u32)] = &[
+    ("return", Seq::Fixed(b"\r"), 0xff0d),
+    ("enter", Seq::Fixed(b"\r"), 0xff0d),
+    ("tab", Seq::Fixed(b"\t"), 0xff09),
+    ("escape", Seq::Fixed(b"\x1b"), 0xff1b),
+    ("esc", Seq::Fixed(b"\x1b"), 0xff1b),
+    ("backspace", Seq::Fixed(b"\x7f"), 0xff08),
+    ("space", Seq::Fixed(b" "), 0x0020),
+    ("up", Seq::Cursor(b"\x1b[A", b"\x1bOA"), 0xff52),
+    ("down", Seq::Cursor(b"\x1b[B", b"\x1bOB"), 0xff54),
+    ("right", Seq::Cursor(b"\x1b[C", b"\x1bOC"), 0xff53),
+    ("left", Seq::Cursor(b"\x1b[D", b"\x1bOD"), 0xff51),
+    ("home", Seq::Cursor(b"\x1b[H", b"\x1bOH"), 0xff50),
+    ("end", Seq::Cursor(b"\x1b[F", b"\x1bOF"), 0xff57),
+    ("pageup", Seq::Fixed(b"\x1b[5~"), 0xff55),
+    ("pagedown", Seq::Fixed(b"\x1b[6~"), 0xff56),
+    ("delete", Seq::Fixed(b"\x1b[3~"), 0xffff),
+    ("f1", Seq::Fixed(b"\x1bOP"), 0xffbe),
+    ("f2", Seq::Fixed(b"\x1bOQ"), 0xffbf),
+    ("f3", Seq::Fixed(b"\x1bOR"), 0xffc0),
+    ("f4", Seq::Fixed(b"\x1bOS"), 0xffc1),
+    ("f5", Seq::Fixed(b"\x1b[15~"), 0xffc2),
+    ("f6", Seq::Fixed(b"\x1b[17~"), 0xffc3),
+    ("f7", Seq::Fixed(b"\x1b[18~"), 0xffc4),
+    ("f8", Seq::Fixed(b"\x1b[19~"), 0xffc5),
+    ("f9", Seq::Fixed(b"\x1b[20~"), 0xffc6),
+    ("f10", Seq::Fixed(b"\x1b[21~"), 0xffc7),
+    ("f11", Seq::Fixed(b"\x1b[23~"), 0xffc8),
+    ("f12", Seq::Fixed(b"\x1b[24~"), 0xffc9),
 ];
 
-pub fn encode(combo: &str, mode: CursorMode) -> Result<Vec<u8>> {
+pub const SHIFT_L: u32 = 0xffe1;
+pub const CONTROL_L: u32 = 0xffe3;
+pub const ALT_L: u32 = 0xffe9;
+pub const SUPER_L: u32 = 0xffeb;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Mods {
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    super_: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Key {
+    /// An index into `NAMED`.
+    Named(usize),
+    Char(char),
+}
+
+fn parse(combo: &str) -> Result<(Mods, Key)> {
     let bad = |why: &str| RecError::new("bad_key", format!("{combo:?}: {why}"));
     // Split off modifiers from the left so a literal "+" key (e.g. "alt++") survives.
     let mut rest = combo;
-    let (mut ctrl, mut alt) = (false, false);
+    let mut mods = Mods::default();
     while let Some((head, tail)) = rest.split_once('+') {
         if tail.is_empty() {
             break;
         }
         match head.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => ctrl = true,
-            "alt" | "meta" | "option" => alt = true,
+            "ctrl" | "control" => mods.ctrl = true,
+            "alt" | "meta" | "option" => mods.alt = true,
+            "shift" => mods.shift = true,
+            "super" | "cmd" | "win" => mods.super_ = true,
             other => return Err(bad(&format!("unknown modifier {other:?}"))),
         }
         rest = tail;
@@ -66,32 +90,75 @@ pub fn encode(combo: &str, mode: CursorMode) -> Result<Vec<u8>> {
     if rest.is_empty() {
         return Err(bad("empty key"));
     }
+    let lower = rest.to_ascii_lowercase();
+    if let Some(i) = NAMED.iter().position(|(n, ..)| *n == lower) {
+        return Ok((mods, Key::Named(i)));
+    }
+    let mut chars = rest.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Ok((mods, Key::Char(c))),
+        _ => Err(bad("unknown key name")),
+    }
+}
 
-    let mut base = base_key(rest, mode).ok_or_else(|| bad("unknown key name"))?;
-    if ctrl {
+/// The bytes a tty program receives for `combo`.
+pub fn encode(combo: &str, mode: CursorMode) -> Result<Vec<u8>> {
+    let bad = |why: &str| RecError::new("bad_key", format!("{combo:?}: {why}"));
+    let (mods, key) = parse(combo)?;
+    if mods.shift || mods.super_ {
+        return Err(bad(
+            "shift and super only combine on x11; on a tty, type the shifted character",
+        ));
+    }
+    let mut base = match key {
+        Key::Named(i) => match (&NAMED[i].1, mode) {
+            (Seq::Fixed(b), _) | (Seq::Cursor(b, _), CursorMode::Normal) => b.to_vec(),
+            (Seq::Cursor(_, b), CursorMode::Application) => b.to_vec(),
+        },
+        Key::Char(c) => c.to_string().into_bytes(),
+    };
+    if mods.ctrl {
         let [b] = base[..] else {
             return Err(bad("ctrl only combines with a single character"));
         };
         base = vec![ctrl_byte(b).ok_or_else(|| bad("no control code for this key"))?];
     }
-    if alt {
+    if mods.alt {
         base.insert(0, 0x1b);
     }
     Ok(base)
 }
 
-fn base_key(name: &str, mode: CursorMode) -> Option<Vec<u8>> {
-    let lower = name.to_ascii_lowercase();
-    if let Some((_, seq)) = NAMED.iter().find(|(n, _)| *n == lower) {
-        return Some(match (seq, mode) {
-            (Seq::Fixed(b), _) | (Seq::Cursor(b, _), CursorMode::Normal) => b.to_vec(),
-            (Seq::Cursor(_, b), CursorMode::Application) => b.to_vec(),
-        });
-    }
-    let mut chars = name.chars();
-    match (chars.next(), chars.next()) {
-        (Some(c), None) => Some(c.to_string().into_bytes()),
-        _ => None,
+/// The modifier keysyms held down, in press order, and the keysym pressed under them. A letter
+/// under ctrl, alt or super is its lowercase key, as on a tty, so `ctrl+C` is not `ctrl+shift+c`.
+pub fn x11(combo: &str) -> Result<(Vec<u32>, u32)> {
+    let (mods, key) = parse(combo)?;
+    let sym = match key {
+        Key::Named(i) => NAMED[i].2,
+        Key::Char(c) if mods.ctrl || mods.alt || mods.super_ => keysym(c.to_ascii_lowercase()),
+        Key::Char(c) => keysym(c),
+    };
+    let held = [
+        (mods.ctrl, CONTROL_L),
+        (mods.alt, ALT_L),
+        (mods.shift, SHIFT_L),
+        (mods.super_, SUPER_L),
+    ];
+    let held = held.iter().filter(|(on, _)| *on).map(|(_, s)| *s).collect();
+    Ok((held, sym))
+}
+
+/// The X11 keysym for a typed character: Latin-1 maps to itself, control characters to their
+/// function keys, and everything else to the Unicode keysym range.
+pub fn keysym(c: char) -> u32 {
+    match c {
+        '\n' | '\r' => 0xff0d,
+        '\t' => 0xff09,
+        '\x08' => 0xff08,
+        '\x1b' => 0xff1b,
+        '\x7f' => 0xffff,
+        ' '..='~' | '\u{a0}'..='\u{ff}' => c as u32,
+        _ => 0x0100_0000 + c as u32,
     }
 }
 
@@ -156,9 +223,43 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_bad_key() {
-        for c in ["Hyper", "shift+a", "ctrl+Up", "ctrl+", "", "F13"] {
+        for c in ["Hyper", "shift+a", "super+x", "ctrl+Up", "ctrl+", "", "F13"] {
             let err = encode(c, Normal).unwrap_err();
             assert_eq!(err.code, "bad_key", "{c:?}");
         }
+    }
+
+    #[test]
+    fn x11_combos_press_one_keysym_under_held_modifiers() {
+        assert_eq!(x11("Return").unwrap(), (vec![], 0xff0d));
+        assert_eq!(x11("BackSpace").unwrap(), (vec![], 0xff08));
+        assert_eq!(x11("PageDown").unwrap(), (vec![], 0xff56));
+        assert_eq!(x11("F12").unwrap(), (vec![], 0xffc9));
+        assert_eq!(x11("space").unwrap(), (vec![], 0x20));
+        assert_eq!(x11("ctrl+c").unwrap(), (vec![CONTROL_L], 'c' as u32));
+        assert_eq!(x11("ctrl+C").unwrap(), (vec![CONTROL_L], 'c' as u32));
+        assert_eq!(
+            x11("ctrl+shift+c").unwrap(),
+            (vec![CONTROL_L, SHIFT_L], 'c' as u32)
+        );
+        assert_eq!(x11("shift+Tab").unwrap(), (vec![SHIFT_L], 0xff09));
+        assert_eq!(
+            x11("super+alt+Left").unwrap(),
+            (vec![ALT_L, SUPER_L], 0xff51)
+        );
+        assert_eq!(x11("A").unwrap(), (vec![], 'A' as u32));
+        assert_eq!(x11("alt++").unwrap(), (vec![ALT_L], '+' as u32));
+        for c in ["Hyper", "ctrl+", "", "F13"] {
+            assert_eq!(x11(c).unwrap_err().code, "bad_key", "{c:?}");
+        }
+    }
+
+    #[test]
+    fn typed_characters_map_to_keysyms() {
+        assert_eq!(keysym('a'), 0x61);
+        assert_eq!(keysym('~'), 0x7e);
+        assert_eq!(keysym('\n'), 0xff0d);
+        assert_eq!(keysym('é'), 0xe9);
+        assert_eq!(keysym('✔'), 0x0100_2714);
     }
 }

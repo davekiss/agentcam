@@ -1,7 +1,7 @@
 //! CLI <-> recorder control protocol: one JSON line each way over `<take>/control.sock`.
 
 use crate::error::{RecError, Result};
-use crate::model::{Source, Take};
+use crate::model::{Button, Source, Take};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -19,7 +19,24 @@ pub enum Request {
     Key {
         combo: String,
     },
+    /// x11: pixel coordinates on the screen.
+    Click {
+        x: u32,
+        y: u32,
+        button: Button,
+    },
+    Move {
+        x: u32,
+        y: u32,
+    },
+    /// tty: the emulated screen as text.
     Screen,
+    /// x11: write a PNG of the screen, to `<take>/screen-<t>.png` when no path is given.
+    Snapshot {
+        png: Option<PathBuf>,
+    },
+    /// A value that changes whenever the recorded screen or output does.
+    Fingerprint,
     /// Plain-text output written since the last input `rec` sent.
     Output,
     Mark {
@@ -49,6 +66,8 @@ pub enum Response {
         take: PathBuf,
         elapsed: f64,
         source: Source,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
     },
     /// `type` and `key`: the take-clock moment the input started.
     Sent {
@@ -66,6 +85,16 @@ pub enum Response {
     Output {
         t: f64,
         text: String,
+    },
+    Snapshot {
+        t: f64,
+        png: PathBuf,
+        width: u32,
+        height: u32,
+    },
+    Fingerprint {
+        t: f64,
+        hash: u64,
     },
     Stopped {
         take: Box<Take>,

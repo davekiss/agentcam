@@ -1,24 +1,31 @@
-//! The pan camera for a cropped viewport: where the window onto a wide terminal sits each
-//! frame. Its position is a pure function of the frames it has seen, so re-exports match.
+//! The pan camera for a cropped viewport: where the window onto a wide terminal or screen sits
+//! each frame. Its position is a pure function of the frames it has seen, so re-exports match.
+//! It works in surface units, whatever the surface is: columns for a terminal, pixels for a
+//! screen recording.
 
 use super::FPS;
 
-/// What one frame says is worth looking at, in grid columns.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What one frame says is worth looking at, as `(left, right)` spans of the surface.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Focus {
-    /// The leftmost and rightmost columns that gained ink since the previous frame.
-    pub ink: Option<(u16, u16)>,
-    /// The cursor's column, when the program shows it.
-    pub cursor: Option<u16>,
+    /// What changed since the previous frame.
+    pub ink: Option<(f64, f64)>,
+    /// Where the cursor or pointer is, when it shows.
+    pub cursor: Option<(f64, f64)>,
+}
+
+/// Grid column `c` spans surface columns `c + 1 .. c + 2`: the panel pads the grid by a column.
+fn cols(lo: u16, hi: u16) -> (f64, f64) {
+    (lo as f64 + 1.0, hi as f64 + 2.0)
 }
 
 impl Focus {
-    /// Compares two screens of the same size. With no previous screen, all ink is new.
+    /// Compares two terminal screens of the same size. With no previous screen, all ink is new.
     pub fn between(prev: Option<&vt100::Screen>, now: &vt100::Screen) -> Focus {
-        let (rows, cols) = now.size();
+        let (rows, width) = now.size();
         let mut ink: Option<(u16, u16)> = None;
         for row in 0..rows {
-            for col in 0..cols {
+            for col in 0..width {
                 let Some(cell) = now.cell(row, col) else {
                     continue;
                 };
@@ -28,9 +35,10 @@ impl Focus {
                 }
             }
         }
+        let cursor = (!now.hide_cursor()).then(|| now.cursor_position().1);
         Focus {
-            ink,
-            cursor: (!now.hide_cursor()).then(|| now.cursor_position().1),
+            ink: ink.map(|(lo, hi)| cols(lo, hi)),
+            cursor: cursor.map(|c| cols(c, c)),
         }
     }
 }
@@ -39,15 +47,14 @@ impl Focus {
 const OMEGA: f64 = 8.0;
 const SETTLED: f64 = 0.01;
 
-/// Positions are in surface columns: the grid plus one column of panel padding each side, so
-/// grid column `c` spans `c + 1 .. c + 2`.
+/// Positions are in surface units.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Camera {
-    /// How many surface columns the window shows.
+    /// How many surface units the window shows.
     window: f64,
     /// The largest left edge, which puts the window against the right edge of the surface.
     max: f64,
-    /// Focus within this many columns of the window edge counts as leaving the window.
+    /// Focus within this many units of the window edge counts as leaving the window.
     margin: f64,
     target: f64,
     x: f64,
@@ -66,9 +73,16 @@ impl Camera {
         }
     }
 
-    /// The window's left edge in surface columns.
+    /// The window's left edge on the surface.
     pub fn x(&self) -> f64 {
         self.x
+    }
+
+    /// Puts the window where `focus` aims it, with no glide, for a take's first frame.
+    pub fn place(&mut self, focus: Focus) {
+        self.target = self.aim(focus);
+        self.x = self.target;
+        self.velocity = 0.0;
     }
 
     /// Advances one frame.
@@ -93,7 +107,6 @@ impl Camera {
     fn aim(&self, focus: Focus) -> f64 {
         let mut target = self.target;
         if let Some((lo, hi)) = focus.ink {
-            let (lo, hi) = (lo as f64 + 1.0, hi as f64 + 2.0);
             if !self.comfortable(target, lo, hi) {
                 target = if hi - lo <= self.window - 2.0 * self.margin {
                     (lo + hi - self.window) / 2.0
@@ -103,8 +116,7 @@ impl Camera {
                 target = target.clamp(0.0, self.max);
             }
         }
-        if let Some(c) = focus.cursor {
-            let (lo, hi) = (c as f64 + 1.0, c as f64 + 2.0);
+        if let Some((lo, hi)) = focus.cursor {
             if !self.comfortable(target, lo, hi) {
                 target = ((lo + hi - self.window) / 2.0).clamp(0.0, self.max);
             }
@@ -133,8 +145,12 @@ mod tests {
     fn cursor(c: u16) -> Focus {
         Focus {
             ink: None,
-            cursor: Some(c),
+            cursor: Some(cols(c, c)),
         }
+    }
+
+    fn ink(lo: u16, hi: u16) -> Option<(f64, f64)> {
+        Some(cols(lo, hi))
     }
 
     fn run(cam: &mut Camera, focus: Focus, frames: usize) -> Vec<f64> {
@@ -151,8 +167,8 @@ mod tests {
         let mut cam = camera();
         for c in 2..40 {
             let typed = Focus {
-                ink: Some((c - 1, c - 1)),
-                cursor: Some(c),
+                ink: ink(c - 1, c - 1),
+                cursor: cursor(c).cursor,
             };
             assert_eq!(
                 run(&mut cam, typed, 3),
@@ -193,7 +209,7 @@ mod tests {
             cursor(0),
             cursor(99),
             Focus {
-                ink: Some((0, 99)),
+                ink: ink(0, 99),
                 cursor: None,
             },
             cursor(60),
@@ -209,7 +225,7 @@ mod tests {
     fn hidden_cursor_follows_ink_and_wide_ink_shows_its_left_end() {
         let mut cam = camera();
         let far = Focus {
-            ink: Some((80, 85)),
+            ink: ink(80, 85),
             cursor: None,
         };
         let x = *run(&mut cam, far, 60).last().unwrap();
@@ -218,7 +234,7 @@ mod tests {
             "ink 80..85 centered in window at {x}"
         );
         let wide = Focus {
-            ink: Some((3, 90)),
+            ink: ink(3, 90),
             cursor: None,
         };
         assert_eq!(*run(&mut cam, wide, 90).last().unwrap(), 0.0);
@@ -230,12 +246,12 @@ mod tests {
             .map(|i| match i % 50 {
                 0 => cursor(95),
                 20 => Focus {
-                    ink: Some((10, 12)),
+                    ink: ink(10, 12),
                     cursor: None,
                 },
                 35 => Focus {
-                    ink: Some((0, 99)),
-                    cursor: Some(4),
+                    ink: ink(0, 99),
+                    cursor: cursor(4).cursor,
                 },
                 _ => Focus::default(),
             })
@@ -253,6 +269,21 @@ mod tests {
     }
 
     #[test]
+    fn a_pixel_surface_follows_the_pointer_with_the_same_dead_zone() {
+        // A 1920-wide screen scaled to 3271px, seen through a 1000px window.
+        let mut cam = Camera::new(1000.0, 3271.0);
+        let at = |x: f64| Focus {
+            ink: None,
+            cursor: Some((x, x)),
+        };
+        cam.place(at(1635.0));
+        assert_eq!(cam.x(), 1135.0, "first frame centers on the pointer with no glide");
+        assert_eq!(run(&mut cam, at(1400.0), 30), vec![1135.0; 30], "inside the dead zone");
+        let x = *run(&mut cam, at(3200.0), 90).last().unwrap();
+        assert_eq!(x, 2271.0, "pinned to the right edge of the surface");
+    }
+
+    #[test]
     fn a_grid_no_wider_than_the_window_stays_put() {
         let mut cam = Camera::new(55.0, 50.0);
         assert_eq!(run(&mut cam, cursor(45), 10), vec![0.0; 10]);
@@ -266,15 +297,15 @@ mod tests {
         assert_eq!(
             Focus::between(None, &before),
             Focus {
-                ink: Some((0, 4)),
-                cursor: Some(5)
+                ink: ink(0, 4),
+                cursor: cursor(5).cursor,
             }
         );
         p.process(b"\x1b[3;20Hxy\x1b[?25l");
         assert_eq!(
             Focus::between(Some(&before), p.screen()),
             Focus {
-                ink: Some((19, 20)),
+                ink: ink(19, 20),
                 cursor: None
             }
         );

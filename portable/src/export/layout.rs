@@ -1,4 +1,5 @@
-//! Layout presets as data, and the math that fits a terminal grid onto a canvas.
+//! Layout presets as data, and the math that fits a terminal grid or a screen recording onto a
+//! canvas.
 
 use crate::error::{RecError, Result};
 use crate::model::Size;
@@ -270,6 +271,76 @@ pub fn viewport(
     }))
 }
 
+/// The x11 screen, in pixels, that exactly fills the preset's canvas inside its margin, so a
+/// take recorded `--for` that layout exports pixel for pixel with no scaling.
+pub fn screen_for(preset: &Preset) -> (u32, u32) {
+    let (w, h) = avail(preset);
+    (w & !1, h & !1)
+}
+
+/// What part of a screen recording a layout shows, and where. The same rule as `viewport`:
+/// fit whole unless the preset pans and fitting leaves most of the height empty.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScreenViewport {
+    /// The whole screen, scaled into `panel`.
+    Fit { panel: Rect },
+    /// The screen scaled by `scale` so it fills the height, cropped by `panel` to a window
+    /// that pans across a surface `surface_w` pixels wide.
+    Follow {
+        panel: Rect,
+        scale: f64,
+        surface_w: f64,
+    },
+}
+
+impl ScreenViewport {
+    pub fn panel(&self) -> Rect {
+        match self {
+            ScreenViewport::Fit { panel } | ScreenViewport::Follow { panel, .. } => *panel,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ScreenViewport::Fit { .. } => "fit",
+            ScreenViewport::Follow { .. } => "follow",
+        }
+    }
+}
+
+pub fn screen_viewport(preset: &Preset, width: u32, height: u32) -> ScreenViewport {
+    let (avail_w, avail_h) = avail(preset);
+    let (w, h) = (width as f64, height as f64);
+    let fit_scale = (avail_w as f64 / w).min(avail_h as f64 / h);
+    let fit_h = (h * fit_scale).round() as u32;
+    let fill_scale = avail_h as f64 / h;
+    let pans = preset.pans
+        && (fit_h as f32) < MIN_FIT_FILL * avail_h as f32
+        && w * fill_scale > avail_w as f64;
+    if pans {
+        let ph = (h * fill_scale).round() as u32;
+        return ScreenViewport::Follow {
+            panel: Rect {
+                x: preset.margin,
+                y: (preset.height - ph) / 2,
+                w: avail_w,
+                h: ph,
+            },
+            scale: fill_scale,
+            surface_w: w * fill_scale,
+        };
+    }
+    let (pw, ph) = ((w * fit_scale).round() as u32, fit_h);
+    ScreenViewport::Fit {
+        panel: Rect {
+            x: (preset.width - pw) / 2,
+            y: (preset.height - ph) / 2,
+            w: pw,
+            h: ph,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +451,38 @@ mod tests {
         for g in [grid(100, 30), grid(300, 30), grid(52, 45)] {
             assert_eq!(viewport(&p, g, JBM, None).unwrap(), Viewport::Fit(fit(&p, g, JBM, None).unwrap()));
         }
+    }
+
+    #[test]
+    fn a_screen_recorded_for_a_layout_fills_it_pixel_for_pixel() {
+        for p in PRESETS {
+            let (w, h) = screen_for(p);
+            assert_eq!((w % 2, h % 2), (0, 0), "H.264 needs even sides");
+            let ScreenViewport::Fit { panel } = screen_viewport(p, w, h) else {
+                panic!("{} screen {w}x{h} should fit {}", p.aspect, p.aspect);
+            };
+            assert_eq!((panel.w, panel.h), (w, h), "{}: no scaling", p.aspect);
+            assert_eq!((panel.x, panel.y), (p.margin, p.margin), "{}: inside the margin", p.aspect);
+        }
+        assert_eq!(screen_for(&preset("9:16").unwrap()), (1000, 1840));
+        assert_eq!(screen_for(&preset("16:9").unwrap()), (1776, 936));
+    }
+
+    #[test]
+    fn a_landscape_screen_follows_on_vertical_and_fits_on_landscape() {
+        let v = preset("9:16").unwrap();
+        let ScreenViewport::Follow { panel, scale, surface_w } = screen_viewport(&v, 1920, 1080) else {
+            panic!("1920x1080 should pan on 9:16");
+        };
+        assert_eq!((panel.x, panel.w, panel.h), (40, 1000, 1840));
+        assert!((scale - 1840.0 / 1080.0).abs() < 1e-9);
+        assert!((surface_w - 1920.0 * scale).abs() < 1e-9);
+        let l = preset("16:9").unwrap();
+        let ScreenViewport::Fit { panel } = screen_viewport(&l, 1920, 1080) else {
+            panic!("16:9 never pans");
+        };
+        assert_eq!((panel.w, panel.h), (1664, 936));
+        assert!(matches!(screen_viewport(&v, 1080, 1920), ScreenViewport::Fit { .. }));
     }
 
     #[test]

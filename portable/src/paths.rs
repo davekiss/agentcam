@@ -102,7 +102,10 @@ pub fn read_active() -> Result<Option<Active>> {
     };
     match serde_json::from_str::<Active>(&raw) {
         Ok(a) if pid_alive(a.pid) => Ok(Some(a)),
-        _ => {
+        stale => {
+            if let Some(display) = stale.ok().and_then(|a| a.display) {
+                crate::x11::clean_stale_display(&display);
+            }
             let _ = std::fs::remove_file(&path);
             Ok(None)
         }

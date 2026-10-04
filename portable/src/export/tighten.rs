@@ -164,7 +164,7 @@ pub fn analyze(
                 typed: String::new(),
                 label: format!("key {key}"),
             }),
-            Event::Marker { .. } => None,
+            Event::Marker { .. } | Event::Cursor { .. } | Event::Click { .. } => None,
         })
         .collect();
 

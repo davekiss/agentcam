@@ -7,11 +7,13 @@ mod output;
 mod paths;
 mod protocol;
 mod recorder;
+mod tty;
 mod upload;
+mod x11;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use error::{RecError, Result};
-use model::{Size, Take};
+use model::{Button, Dims, Frame, Size, Source, Take};
 use protocol::{Request, Response};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -37,7 +39,7 @@ enum Cmd {
     Status,
     /// Add a marker at the current moment.
     Mark { label: String },
-    /// Type text into the recorded terminal.
+    /// Type text into the recorded terminal or screen.
     Type {
         text: String,
         /// Milliseconds between characters.
@@ -47,16 +49,35 @@ enum Cmd {
         #[arg(long)]
         secret: bool,
     },
-    /// Send a key or chord, such as Return, ctrl+c, or alt+x.
+    /// Send a key or chord, such as Return, ctrl+c, alt+x, or shift+Tab (x11).
     Key { combo: String },
-    /// Print the emulated screen.
-    Screen,
-    /// Block until the screen matches a regex.
+    /// Click at a pixel of the x11 screen.
+    Click {
+        x: u32,
+        y: u32,
+        /// left, middle, or right.
+        #[arg(long, default_value = "left")]
+        button: Button,
+    },
+    /// Move the pointer to a pixel of the x11 screen.
+    Move { x: u32, y: u32 },
+    /// Print the emulated tty screen, or write a PNG of the x11 screen.
+    Screen {
+        /// x11: where to write the PNG. Defaults to <take>/screen-<t>.png.
+        #[arg(long)]
+        png: Option<PathBuf>,
+    },
+    /// Block until the screen matches a regex, or until it stops changing.
+    #[command(group(ArgGroup::new("until").required(true).args(["text", "idle"])))]
     Wait {
+        /// tty: a regex the screen must match.
         #[arg(long)]
-        text: String,
+        text: Option<String>,
+        /// Seconds the screen (x11) or output (tty) must stay unchanged.
+        #[arg(long, value_name = "SECONDS")]
+        idle: Option<f64>,
         /// Match only output written since the last `type` or `key`, instead of the screen.
-        #[arg(long)]
+        #[arg(long, requires = "text")]
         new: bool,
         /// Seconds.
         #[arg(long, default_value_t = 30.0)]
@@ -105,14 +126,18 @@ struct ExportArgs {
 }
 
 #[derive(Args, Clone)]
+#[command(group(ArgGroup::new("source").required(true).args(["tty", "x11"])))]
 struct RecordArgs {
     /// Record a command in a pseudo-terminal.
-    #[arg(long, required = true)]
-    tty: bool,
-    /// Terminal grid as COLSxROWS. Defaults to 120x36.
     #[arg(long)]
-    size: Option<Size>,
-    /// Pick the grid that fills this export layout (16:9 or 9:16) at a legible size.
+    tty: bool,
+    /// Record a virtual X display (Linux), optionally launching a command into it.
+    #[arg(long)]
+    x11: bool,
+    /// tty: the grid as COLSxROWS (default 120x36). x11: the screen in pixels (default 1920x1080).
+    #[arg(long)]
+    size: Option<Dims>,
+    /// Pick the grid or screen that fills this export layout (16:9 or 9:16).
     #[arg(long = "for", value_name = "LAYOUT", conflicts_with = "size")]
     for_layout: Option<String>,
     /// Stop after this many seconds.
@@ -124,18 +149,48 @@ struct RecordArgs {
     /// Record into this existing folder (used by `rec start`).
     #[arg(long, hide = true)]
     take_dir: Option<PathBuf>,
-    #[arg(last = true, required = true)]
+    #[arg(last = true)]
     command: Vec<String>,
 }
 
 impl RecordArgs {
-    fn grid(&self) -> Result<Size> {
-        match (&self.for_layout, self.size) {
-            (Some(layout), _) => export::grid_for(layout),
-            (None, Some(size)) => Ok(size),
-            (None, None) => Ok(Size { cols: 120, rows: 36 }),
+    fn source(&self) -> Result<Source> {
+        let bad = |e: String| RecError::new("bad_args", e);
+        let command = self.command.clone();
+        if self.tty {
+            if command.is_empty() {
+                return Err(bad("--tty needs a command after --".into()));
+            }
+            let size = match (&self.for_layout, self.size) {
+                (Some(layout), _) => export::grid_for(layout)?,
+                (None, Some(d)) => Size::try_from(d).map_err(bad)?,
+                (None, None) => Size { cols: 120, rows: 36 },
+            };
+            return Ok(Source::Tty { command, size });
         }
+        let frame = match (&self.for_layout, self.size) {
+            (Some(layout), _) => export::screen_for(layout)?,
+            (None, Some(d)) => Frame::try_from(d).map_err(bad)?,
+            (None, None) => Frame::try_from(Dims { w: 1920, h: 1080 }).expect("valid"),
+        };
+        Ok(Source::X11 { command, frame })
     }
+}
+
+/// The `rec record` flags that reproduce `source`, for `rec start` to hand to its recorder.
+fn record_flags(source: &Source) -> Vec<String> {
+    let (kind, size, command) = match source {
+        Source::Tty { command, size } => ("--tty", format!("{}x{}", size.cols, size.rows), command),
+        Source::X11 { command, frame } => {
+            ("--x11", format!("{}x{}", frame.width, frame.height), command)
+        }
+    };
+    let mut flags = vec![kind.to_string(), "--size".into(), size];
+    if !command.is_empty() {
+        flags.push("--".into());
+        flags.extend(command.iter().cloned());
+    }
+    flags
 }
 
 fn main() {
@@ -175,17 +230,25 @@ fn run(cmd: Cmd) -> Result<Value> {
             secret,
         })?),
         Cmd::Key { combo } => {
-            keys::encode(&combo, keys::CursorMode::Normal)?;
+            keys::x11(&combo)?;
             sent(call(&Request::Key { combo })?)
         }
-        Cmd::Screen => match call(&Request::Screen)? {
-            Response::Screen { screen, .. } => Ok(json!(screen)),
-            other => unexpected(other),
+        Cmd::Click { x, y, button } => sent(call(&Request::Click { x, y, button })?),
+        Cmd::Move { x, y } => sent(call(&Request::Move { x, y })?),
+        Cmd::Screen { png } => screen(png),
+        Cmd::Wait {
+            text,
+            idle,
+            new,
+            timeout,
+        } => match (text, idle) {
+            (Some(text), _) => wait(&text, new, timeout),
+            (None, Some(idle)) => wait_idle(idle, timeout),
+            (None, None) => unreachable!("clap requires one"),
         },
-        Cmd::Wait { text, new, timeout } => wait(&text, new, timeout),
         Cmd::Export(args) => export(args),
         Cmd::Doctor => Ok(doctor()),
-        Cmd::Sources => Ok(json!({ "tty": true, "x11": false })),
+        Cmd::Sources => Ok(json!({ "tty": true, "x11": x11_missing().is_empty() })),
     }
 }
 
@@ -213,7 +276,7 @@ fn take_json(take: &Take) -> Value {
 }
 
 fn record(args: RecordArgs) -> Result<Value> {
-    let size = args.grid()?;
+    let source = args.source()?;
     let take_dir = match args.take_dir {
         Some(dir) => dir,
         None => {
@@ -226,9 +289,8 @@ fn record(args: RecordArgs) -> Result<Value> {
     };
     let take = recorder::record(recorder::RecordOptions {
         take_dir: take_dir.clone(),
-        size,
         duration: args.duration,
-        command: args.command,
+        source,
     })?;
     match take.error {
         Some(e) => Err(RecError::new(
@@ -245,7 +307,7 @@ fn start(args: RecordArgs) -> Result<Value> {
     if let Some(a) = paths::read_active()? {
         return Err(paths::already_recording(&a));
     }
-    let size = args.grid()?;
+    let source = args.source()?;
     let out = args.out.clone().map_or_else(paths::default_out_dir, Ok)?;
     let dir = paths::create_take_dir(&out, chrono::Local::now())?;
     let log_path = dir.join(model::LOG_FILE);
@@ -257,14 +319,11 @@ fn start(args: RecordArgs) -> Result<Value> {
 
     let exe = std::env::current_exe().map_err(|e| RecError::io("locate rec binary", e))?;
     let mut cmd = std::process::Command::new(exe);
-    cmd.args(["record", "--tty", "--size"])
-        .arg(format!("{}x{}", size.cols, size.rows))
-        .arg("--take-dir")
-        .arg(&dir);
+    cmd.arg("record").arg("--take-dir").arg(&dir);
     if let Some(d) = args.duration {
         cmd.arg("--duration").arg(d.to_string());
     }
-    cmd.arg("--").args(&args.command);
+    cmd.args(record_flags(&source));
     cmd.stdin(std::process::Stdio::null())
         .stdout(log)
         .stderr(log_err);
@@ -279,7 +338,8 @@ fn start(args: RecordArgs) -> Result<Value> {
     }
     let mut child = cmd.spawn().map_err(|e| RecError::io("spawn recorder", e))?;
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Xvfb plus ffmpeg's first frame takes a second or two; a loaded box can take longer.
+    let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             return Err(recorder_log_error(&log_path).unwrap_or_else(|| {
@@ -289,15 +349,19 @@ fn start(args: RecordArgs) -> Result<Value> {
                 )
             }));
         }
-        if protocol::call(&dir, &Request::Status).is_ok() {
-            return Ok(json!({ "take": dir, "pid": child.id() }));
+        if let Ok(Response::Status { display, .. }) = protocol::call(&dir, &Request::Status) {
+            let mut started = json!({ "take": dir, "pid": child.id() });
+            if let Some(display) = display {
+                started["display"] = json!(display);
+            }
+            return Ok(started);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             return Err(RecError::new(
                 "start_timeout",
                 format!(
-                    "recorder did not answer within 10s; see {}",
+                    "recorder did not answer within 20s; see {}",
                     log_path.display()
                 ),
             ));
@@ -349,7 +413,15 @@ fn status() -> Result<Value> {
             take,
             elapsed,
             source,
-        } => Ok(json!({ "recording": true, "take": take, "elapsed": elapsed, "source": source })),
+            display,
+        } => {
+            let mut status =
+                json!({ "recording": true, "take": take, "elapsed": elapsed, "source": source });
+            if let Some(display) = display {
+                status["display"] = json!(display);
+            }
+            Ok(status)
+        }
         other => unexpected(other),
     }
 }
@@ -379,6 +451,67 @@ fn wait(pattern: &str, new: bool, timeout: f64) -> Result<Value> {
             ));
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// tty: the screen as text. x11: a PNG of the screen.
+fn screen(png: Option<PathBuf>) -> Result<Value> {
+    let a = active()?;
+    let req = match (&a.source, png) {
+        (Source::Tty { .. }, None) => Request::Screen,
+        (Source::Tty { .. }, Some(_)) => {
+            return Err(recorder::not_supported("screen --png", "tty"))
+        }
+        (Source::X11 { .. }, png) => Request::Snapshot {
+            png: png
+                .map(|p| std::path::absolute(&p).map_err(|e| RecError::io("png path", e)))
+                .transpose()?,
+        },
+    };
+    match protocol::call(&a.take, &req)? {
+        Response::Screen { screen, .. } => Ok(json!(screen)),
+        Response::Snapshot {
+            t,
+            png,
+            width,
+            height,
+        } => Ok(json!({ "png": png, "width": width, "height": height, "t": t })),
+        other => unexpected(other),
+    }
+}
+
+/// Returns once the fingerprint has held still for `idle` seconds since the wait began. Going
+/// back to the image before the current one does not count as a change, so a blinking cursor
+/// does not keep an idle screen busy.
+fn wait_idle(idle: f64, timeout: f64) -> Result<Value> {
+    let take = active()?.take;
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs_f64(timeout.max(0.0));
+    let idle = Duration::from_secs_f64(idle.max(0.0));
+    let mut recent: [Option<u64>; 2] = [None, None];
+    let mut quiet_since = started;
+    loop {
+        let (t, hash) = match protocol::call(&take, &Request::Fingerprint)? {
+            Response::Fingerprint { t, hash } => (t, hash),
+            other => return unexpected(other),
+        };
+        let now = Instant::now();
+        if !recent.contains(&Some(hash)) {
+            if recent[0].is_some() {
+                quiet_since = now;
+            }
+            recent = [Some(hash), recent[0]];
+        }
+        if now.duration_since(quiet_since) >= idle {
+            return Ok(json!({ "idle": true, "t": t }));
+        }
+        if now >= deadline {
+            return Err(RecError::new(
+                "timeout",
+                format!("the screen kept changing for {timeout}s"),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -464,15 +597,27 @@ fn read_plan(path: &std::path::Path) -> Result<export::tighten::Plan> {
     })
 }
 
+/// What the x11 source needs that is not on PATH.
+fn x11_missing() -> Vec<&'static str> {
+    ["Xvfb", "ffmpeg"]
+        .into_iter()
+        .filter(|tool| export::find_on_path(tool).is_none())
+        .collect()
+}
+
 fn doctor() -> Value {
     let pty = portable_pty::native_pty_system().openpty(portable_pty::PtySize::default());
     let ffmpeg = export::find_on_path("ffmpeg");
+    let x11_missing = x11_missing();
     let mut missing = Vec::new();
     if pty.is_err() {
         missing.push("pty");
     }
     if ffmpeg.is_none() {
         missing.push("ffmpeg");
+    }
+    if x11_missing.contains(&"Xvfb") {
+        missing.push("Xvfb");
     }
     json!({
         "platform": std::env::consts::OS,
@@ -483,7 +628,11 @@ fn doctor() -> Value {
                 "needs": ["pty"],
                 "error": pty.as_ref().err().map(|e| e.to_string()),
             },
-            "x11": { "ok": false, "error": "not implemented yet" },
+            "x11": {
+                "ok": x11_missing.is_empty(),
+                "needs": ["Xvfb", "ffmpeg"],
+                "missing": x11_missing,
+            },
         },
         "ffmpeg": { "found": ffmpeg.is_some(), "path": ffmpeg, "neededBy": ["export"] },
         "missing": missing,

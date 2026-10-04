@@ -1,41 +1,65 @@
 //! The one recording code path: `rec record`. `rec start` runs this same thing detached.
+//! The lifecycle, the control socket, and the timeline live here; what is recorded and how
+//! input reaches it is a `Capture` (a PTY in tty.rs, a virtual display in x11.rs).
 
-use crate::cast::{CastWriter, Header, Utf8Buffer};
 use crate::error::{RecError, Result};
-use crate::keys::{self, CursorMode};
 use crate::model::{
-    self, round_t, Active, Event, Marker, Size, Source, Take, TakeStatus, TimedEvent, Timeline,
-    Track,
+    self, normalize, round_t, Active, Button, Event, Marker, Source, Take, TakeStatus,
+    TimedEvent, Timeline, Track,
 };
-use crate::output::OutputLog;
 use crate::paths;
-use crate::protocol::{self, Cursor, Request, Response, ScreenText};
-use portable_pty::{CommandBuilder, PtySize};
-use std::io::{BufRead, Read, Write};
+use crate::protocol::{self, Request, Response, ScreenText};
+use std::io::{BufRead, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub struct RecordOptions {
     pub take_dir: PathBuf,
-    pub size: Size,
     pub duration: Option<f64>,
-    pub command: Vec<String>,
+    pub source: Source,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    Recording,
-    Finalizing,
-    Finished,
-    Failed,
+/// The take clock and the input log. A capture creates it at the moment its first track
+/// starts, which is t0.
+pub struct Journal {
+    t0: Instant,
+    live: AtomicBool,
+    events: Mutex<Vec<TimedEvent>>,
+}
+
+impl Journal {
+    pub fn start() -> Arc<Journal> {
+        Arc::new(Journal {
+            t0: Instant::now(),
+            live: AtomicBool::new(true),
+            events: Mutex::new(Vec::new()),
+        })
+    }
+
+    pub fn t0(&self) -> Instant {
+        self.t0
+    }
+
+    pub fn now(&self) -> f64 {
+        round_t(self.t0.elapsed().as_secs_f64())
+    }
+
+    /// False once the take starts finishing; long inputs check it between characters.
+    pub fn live(&self) -> bool {
+        self.live.load(Ordering::Relaxed)
+    }
+
+    pub fn log(&self, t: f64, event: Event) {
+        self.events.lock().unwrap().push(TimedEvent { t, event });
+    }
 }
 
 #[derive(Debug)]
-enum FinishReason {
+pub enum FinishReason {
     Stop,
     ChildExited,
     Duration,
@@ -43,51 +67,90 @@ enum FinishReason {
     Failed(RecError),
 }
 
-enum Msg {
-    /// The first one received ends the take; later ones only add stop waiters.
-    Finish {
-        reason: FinishReason,
-        waiter: Option<UnixStream>,
-    },
-    ReaderDone,
+pub fn not_supported(what: &str, source: &str) -> RecError {
+    RecError::new(
+        "not_supported",
+        format!("{what} is not supported on {source} takes"),
+    )
+}
+
+/// One source kind's recording: its children, its tracks, and how input reaches it.
+pub trait Capture: Send + Sync {
+    /// "tty" or "x11", for error messages.
+    fn kind(&self) -> &'static str;
+
+    /// Sends `text` one character at a time, `delay` apart, stopping early when the take ends.
+    fn type_text(&self, text: &str, delay: Duration, journal: &Journal) -> Result<()>;
+
+    fn key(&self, combo: &str) -> Result<()>;
+
+    /// A value that changes whenever what the take records changes, for `rec wait --idle`.
+    fn fingerprint(&self) -> Result<u64>;
+
+    fn click(&self, _x: u32, _y: u32, _button: Button) -> Result<()> {
+        Err(not_supported("click", self.kind()))
+    }
+
+    fn move_to(&self, _x: u32, _y: u32) -> Result<()> {
+        Err(not_supported("move", self.kind()))
+    }
+
+    fn screen_text(&self) -> Result<ScreenText> {
+        Err(not_supported(
+            "reading the screen as text (OCR comes later)",
+            self.kind(),
+        ))
+    }
+
+    fn output(&self) -> Result<String> {
+        Err(not_supported("wait --new", self.kind()))
+    }
+
+    /// Writes a PNG of what is on screen and returns its size.
+    fn snapshot(&self, _png: &Path) -> Result<(u32, u32)> {
+        Err(not_supported("screen --png", self.kind()))
+    }
+
+    /// Polled by the recorder: why the take should end on its own, if it should.
+    fn ended(&self) -> Option<FinishReason>;
+
+    /// Stops every child and finalizes the track files. Runs once, and must leave no process
+    /// behind even when it reports an error.
+    fn teardown(&self) -> Result<()>;
+}
+
+/// What a capture hands back once it is recording.
+pub struct Started {
+    pub journal: Arc<Journal>,
+    pub capture: Box<dyn Capture>,
+    pub tracks: Vec<Track>,
+    /// The X display an x11 take records, for `rec start` to hand back.
+    pub display: Option<String>,
 }
 
 struct Shared {
-    t0: Instant,
+    journal: Arc<Journal>,
     take_dir: PathBuf,
     source: Source,
-    phase: Mutex<Phase>,
-    screen: Mutex<vt100::Parser>,
-    output: Mutex<OutputLog>,
-    /// Output cursor taken just before the last input byte reached the PTY, so whatever the
-    /// program writes in response lands after it.
-    input_mark: AtomicU64,
-    pty_in: Mutex<Box<dyn Write + Send>>,
-    events: Mutex<Vec<TimedEvent>>,
+    display: Option<String>,
+    capture: Box<dyn Capture>,
     markers: Mutex<std::fs::File>,
     tx: Sender<Msg>,
 }
 
-impl Shared {
-    fn now(&self) -> f64 {
-        round_t(self.t0.elapsed().as_secs_f64())
-    }
+/// Asks the recorder to finish. The first one received ends the take; later ones only add
+/// stop waiters.
+pub struct Msg {
+    reason: FinishReason,
+    waiter: Option<UnixStream>,
+}
 
-    fn recording(&self) -> bool {
-        *self.phase.lock().unwrap() == Phase::Recording
-    }
-
-    fn send_input(&self, bytes: &[u8]) -> Result<()> {
-        let mut w = self.pty_in.lock().unwrap();
-        let mark = self.output.lock().unwrap().cursor();
-        self.input_mark.store(mark, Ordering::Relaxed);
-        w.write_all(bytes)
-            .and_then(|_| w.flush())
-            .map_err(|e| RecError::io("write to pty", e))
-    }
-
-    fn log(&self, t: f64, event: Event) {
-        self.events.lock().unwrap().push(TimedEvent { t, event });
+impl Msg {
+    pub fn failed(error: RecError) -> Msg {
+        Msg {
+            reason: FinishReason::Failed(error),
+            waiter: None,
+        }
     }
 }
 
@@ -100,10 +163,6 @@ pub fn record(opts: RecordOptions) -> Result<Take> {
     }
 
     let dir = opts.take_dir.clone();
-    let source = Source::Tty {
-        command: opts.command.clone(),
-        size: opts.size,
-    };
     let created = chrono::Utc::now();
     let mut take = Take {
         version: 2,
@@ -111,23 +170,22 @@ pub fn record(opts: RecordOptions) -> Result<Take> {
         created_at: created.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         status: TakeStatus::Recording,
         duration: None,
-        source: source.clone(),
-        tracks: vec![Track::Term {
-            file: model::CAST_FILE.into(),
-            offset: 0.0,
-        }],
+        source: opts.source.clone(),
+        tracks: vec![],
         error: None,
     };
     take.write(&dir)?;
-    paths::write_active(&Active {
+    let mut active = Active {
         pid,
         take: dir.clone(),
         started_at: take.created_at.clone(),
-        source: source.clone(),
-    })?;
+        source: opts.source.clone(),
+        display: None,
+    };
+    paths::write_active(&active)?;
 
-    if let Err(err) = run(&mut take, &dir, &opts) {
-        // run only fails before the child starts, or when the final take.json write fails.
+    if let Err(err) = run(&mut take, &mut active, &dir, &opts) {
+        // run only fails before the capture starts, or when the final take.json write fails.
         take.status = TakeStatus::Failed;
         take.error = Some(err);
         let _ = take.write(&dir);
@@ -139,13 +197,7 @@ pub fn record(opts: RecordOptions) -> Result<Take> {
 
 /// Records until the first finish reason, then finalizes `take` on disk and answers
 /// every `rec stop` that is waiting on it.
-fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
-    let size = opts.size;
-    let (program, args) = opts
-        .command
-        .split_first()
-        .ok_or_else(|| RecError::new("bad_args", "no command given after --"))?;
-
+fn run(take: &mut Take, active: &mut Active, dir: &Path, opts: &RecordOptions) -> Result<()> {
     let listener = protocol::bind(&protocol::socket_path(dir))?;
     let interrupted = Arc::new(AtomicBool::new(false));
     for sig in [
@@ -156,43 +208,6 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
         signal_hook::flag::register(sig, interrupted.clone())
             .map_err(|e| RecError::io("install signal handler", e))?;
     }
-
-    let pty = portable_pty::native_pty_system()
-        .openpty(PtySize {
-            rows: size.rows,
-            cols: size.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| RecError::new("pty", e.to_string()))?;
-    let mut cmd = CommandBuilder::new(program);
-    cmd.args(args);
-    cmd.env("TERM", "xterm-256color");
-    // portable-pty defaults to $HOME when no cwd is given; run where the user ran rec.
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
-    }
-    let mut reader = pty
-        .master
-        .try_clone_reader()
-        .map_err(|e| RecError::new("pty", e.to_string()))?;
-    let writer = pty
-        .master
-        .take_writer()
-        .map_err(|e| RecError::new("pty", e.to_string()))?;
-
-    let cast_file = std::fs::File::create(dir.join(model::CAST_FILE))
-        .map_err(|e| RecError::io("create term.cast", e))?;
-    let mut cast = CastWriter::new(
-        cast_file,
-        &Header {
-            version: 2,
-            width: size.cols,
-            height: size.rows,
-            timestamp: chrono::Utc::now().timestamp(),
-        },
-    )
-    .map_err(|e| RecError::io("write term.cast", e))?;
     let markers = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -200,53 +215,25 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
         .map_err(|e| RecError::io("open markers.jsonl", e))?;
 
     let (tx, rx) = mpsc::channel();
+    let started = match &opts.source {
+        Source::Tty { command, size } => crate::tty::start(dir, command, *size, tx.clone())?,
+        Source::X11 { command, frame } => crate::x11::start(dir, command, *frame)?,
+    };
+    take.tracks = started.tracks;
+    take.write(dir)?;
+    if started.display.is_some() {
+        active.display = started.display.clone();
+        paths::write_active(active)?;
+    }
     let shared = Arc::new(Shared {
-        t0: Instant::now(),
+        journal: started.journal,
         take_dir: dir.to_path_buf(),
         source: take.source.clone(),
-        phase: Mutex::new(Phase::Recording),
-        screen: Mutex::new(vt100::Parser::new(size.rows, size.cols, 0)),
-        output: Mutex::new(OutputLog::new(OutputLog::CAP)),
-        input_mark: AtomicU64::new(0),
-        pty_in: Mutex::new(writer),
-        events: Mutex::new(Vec::new()),
+        display: started.display,
+        capture: started.capture,
         markers: Mutex::new(markers),
-        tx: tx.clone(),
+        tx,
     });
-
-    let mut child = pty
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| RecError::new("spawn_failed", format!("{program}: {e}")))?;
-    // The child holds its own copy; keeping ours would stop EOF from ever arriving.
-    drop(pty.slave);
-
-    {
-        let shared = shared.clone();
-        std::thread::spawn(move || {
-            let mut utf8 = Utf8Buffer::default();
-            let mut buf = [0u8; 65536];
-            loop {
-                let n = match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => n,
-                };
-                let t = shared.t0.elapsed().as_secs_f64();
-                shared.screen.lock().unwrap().process(&buf[..n]);
-                shared.output.lock().unwrap().push(&buf[..n]);
-                if let Err(e) = cast.output(t, &utf8.push(&buf[..n])) {
-                    let _ = shared.tx.send(Msg::Finish {
-                        reason: FinishReason::Failed(RecError::io("write term.cast", e)),
-                        waiter: None,
-                    });
-                    break;
-                }
-            }
-            let t = shared.t0.elapsed().as_secs_f64();
-            let _ = cast.output(t, &utf8.finish());
-            let _ = shared.tx.send(Msg::ReaderDone);
-        });
-    }
 
     {
         let shared = shared.clone();
@@ -260,18 +247,16 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
 
     eprintln!("rec: recording {}", dir.display());
 
-    let deadline = opts.duration.map(|s| shared.t0 + Duration::from_secs_f64(s.max(0.0)));
+    let journal = &shared.journal;
+    let deadline = opts
+        .duration
+        .map(|s| journal.t0() + Duration::from_secs_f64(s.max(0.0)));
     let mut waiters = Vec::new();
-    let mut reader_done = false;
     let reason = loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Msg::Finish { reason, waiter }) => {
+            Ok(Msg { reason, waiter }) => {
                 waiters.extend(waiter);
                 break reason;
-            }
-            Ok(Msg::ReaderDone) => {
-                reader_done = true;
-                break FinishReason::ChildExited;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => unreachable!("shared holds a sender"),
@@ -282,40 +267,23 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break FinishReason::Duration;
         }
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            break FinishReason::ChildExited;
+        if let Some(reason) = shared.capture.ended() {
+            break reason;
         }
     };
-    let duration = shared.now();
-    *shared.phase.lock().unwrap() = Phase::Finalizing;
+    let duration = journal.now();
+    journal.live.store(false, Ordering::Relaxed);
     eprintln!("rec: finishing ({reason:?}) at {duration}s");
 
-    if !matches!(child.try_wait(), Ok(Some(_))) {
-        if let Some(pid) = child.process_id().and_then(|p| i32::try_from(p).ok()) {
-            // The child leads its own session, so this reaches anything it spawned too.
-            unsafe { libc::kill(-pid, libc::SIGHUP) };
-        }
-        let _ = child.kill();
-    }
-    let _ = child.wait();
-
-    let drain_until = Instant::now() + Duration::from_secs(2);
-    while !reader_done {
-        let left = drain_until.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
-            Ok(Msg::ReaderDone) => reader_done = true,
-            Ok(Msg::Finish { waiter, .. }) => waiters.extend(waiter),
-            Err(_) => break,
-        }
-    }
-
+    let torn = shared.capture.teardown();
     let failure = match reason {
         FinishReason::Failed(e) => Some(e),
         _ => None,
     };
+    let failure = failure.or(torn.err());
     let timeline = Timeline {
         version: 2,
-        events: merged_events(&shared.events.lock().unwrap(), dir),
+        events: merged_events(&journal.events.lock().unwrap(), dir),
     };
     let wrote = model::write_json_atomic(&dir.join(model::TIMELINE_FILE), &timeline);
     let failure = failure.or(wrote.err());
@@ -328,15 +296,9 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
     take.duration = Some(duration);
     take.error = failure;
     take.write(dir)?;
-    *shared.phase.lock().unwrap() = match take.status {
-        TakeStatus::Failed => Phase::Failed,
-        _ => Phase::Finished,
-    };
 
     while let Ok(msg) = rx.try_recv() {
-        if let Msg::Finish { waiter, .. } = msg {
-            waiters.extend(waiter);
-        }
+        waiters.extend(msg.waiter);
     }
     let reply = Response::Stopped {
         take: Box::new(take.clone()),
@@ -374,13 +336,13 @@ fn handle_connection(stream: UnixStream, shared: &Shared) {
     };
     if let Request::Stop = req {
         // The main thread replies once the take is finalized.
-        let _ = shared.tx.send(Msg::Finish {
+        let _ = shared.tx.send(Msg {
             reason: FinishReason::Stop,
             waiter: Some(stream),
         });
         return;
     }
-    let resp = if shared.recording() {
+    let resp = if shared.journal.live() {
         serve(req, shared).unwrap_or_else(|error| Response::Error { error })
     } else {
         Response::Error {
@@ -390,74 +352,100 @@ fn handle_connection(stream: UnixStream, shared: &Shared) {
     let _ = protocol::write_message(&stream, &resp);
 }
 
+/// A pixel position on an x11 take's screen, checked against the frame.
+fn on_screen(source: &Source, x: u32, y: u32) -> Result<(f64, f64)> {
+    let Source::X11 { frame, .. } = source else {
+        return Err(not_supported("click and move", "tty"));
+    };
+    if x >= frame.width || y >= frame.height {
+        return Err(RecError::new(
+            "bad_args",
+            format!(
+                "({x}, {y}) is outside the {}x{} screen",
+                frame.width, frame.height
+            ),
+        ));
+    }
+    Ok((normalize(x as f64, frame.width), normalize(y as f64, frame.height)))
+}
+
 fn serve(req: Request, shared: &Shared) -> Result<Response> {
+    let journal = &shared.journal;
+    let capture = &shared.capture;
     match req {
         Request::Status => Ok(Response::Status {
             take: shared.take_dir.clone(),
-            elapsed: shared.now(),
+            elapsed: journal.now(),
             source: shared.source.clone(),
+            display: shared.display.clone(),
         }),
         Request::Type {
             text,
             delay_ms,
             secret,
         } => {
-            let t = shared.now();
-            shared.log(
+            let t = journal.now();
+            journal.log(
                 t,
                 Event::Type {
                     text: (!secret).then(|| text.clone()),
                     redacted: secret,
                 },
             );
-            let mut buf = [0u8; 4];
-            for (i, ch) in text.chars().enumerate() {
-                if !shared.recording() {
-                    break;
-                }
-                if i > 0 && delay_ms > 0 {
-                    std::thread::sleep(Duration::from_millis(delay_ms));
-                }
-                shared.send_input(ch.encode_utf8(&mut buf).as_bytes())?;
-            }
+            capture.type_text(&text, Duration::from_millis(delay_ms), journal)?;
             Ok(Response::Sent { t })
         }
         Request::Key { combo } => {
-            let mode = if shared.screen.lock().unwrap().screen().application_cursor() {
-                CursorMode::Application
-            } else {
-                CursorMode::Normal
-            };
-            let bytes = keys::encode(&combo, mode)?;
-            let t = shared.now();
-            shared.send_input(&bytes)?;
-            shared.log(t, Event::Key { key: combo });
+            let t = journal.now();
+            capture.key(&combo)?;
+            journal.log(t, Event::Key { key: combo });
             Ok(Response::Sent { t })
         }
-        Request::Screen => {
-            let parser = shared.screen.lock().unwrap();
-            let screen = parser.screen();
-            let (rows, cols) = screen.size();
-            let (row, col) = screen.cursor_position();
-            Ok(Response::Screen {
-                t: shared.now(),
-                screen: ScreenText {
-                    text: screen.contents(),
-                    cols,
-                    rows,
-                    cursor: Cursor { row, col },
+        Request::Click { x, y, button } => {
+            let (nx, ny) = on_screen(&shared.source, x, y)?;
+            let t = journal.now();
+            capture.click(x, y, button)?;
+            journal.log(
+                t,
+                Event::Click {
+                    x: nx,
+                    y: ny,
+                    button,
                 },
+            );
+            Ok(Response::Sent { t })
+        }
+        Request::Move { x, y } => {
+            on_screen(&shared.source, x, y)?;
+            let t = journal.now();
+            capture.move_to(x, y)?;
+            Ok(Response::Sent { t })
+        }
+        Request::Screen => Ok(Response::Screen {
+            t: journal.now(),
+            screen: capture.screen_text()?,
+        }),
+        Request::Output => Ok(Response::Output {
+            t: journal.now(),
+            text: capture.output()?,
+        }),
+        Request::Snapshot { png } => {
+            let t = journal.now();
+            let png = png.unwrap_or_else(|| shared.take_dir.join(format!("screen-{t:.3}.png")));
+            let (width, height) = capture.snapshot(&png)?;
+            Ok(Response::Snapshot {
+                t,
+                png,
+                width,
+                height,
             })
         }
-        Request::Output => {
-            let mark = shared.input_mark.load(Ordering::Relaxed);
-            Ok(Response::Output {
-                t: shared.now(),
-                text: shared.output.lock().unwrap().since(mark).to_string(),
-            })
-        }
+        Request::Fingerprint => Ok(Response::Fingerprint {
+            t: journal.now(),
+            hash: capture.fingerprint()?,
+        }),
         Request::Mark { label } => {
-            let t = shared.now();
+            let t = journal.now();
             let mut line = serde_json::to_string(&Marker {
                 t,
                 label: label.clone(),

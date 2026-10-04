@@ -1,9 +1,11 @@
-//! `rec export`: replay term.cast through vt100 at 30 fps and encode with ffmpeg.
+//! `rec export`: compose a take's frames at 30 fps into each layout and encode with ffmpeg.
+//! A tty take replays term.cast through vt100; an x11 take decodes screen.mp4.
 
 mod border;
 mod camera;
 pub mod layout;
 mod render;
+mod screen;
 pub mod tighten;
 pub mod theme;
 mod view;
@@ -38,7 +40,7 @@ pub enum Pacing {
 #[derive(Debug, Serialize)]
 pub struct Export {
     pub layout: &'static str,
-    /// `fit` shows the whole grid; `follow` crops to a window that pans with the action.
+    /// `fit` shows the whole source; `follow` crops to a window that pans with the action.
     pub viewport: &'static str,
     pub path: PathBuf,
     pub width: u32,
@@ -48,24 +50,14 @@ pub struct Export {
     pub tightened: Option<tighten::Tightened>,
 }
 
-/// A finished tty take, read for export.
-struct Loaded {
-    take: Take,
-    duration: f64,
+/// A finished tty take's terminal stream.
+struct TtyTake {
     cast: crate::cast::Cast,
     size: model::Size,
 }
 
-impl Loaded {
-    fn read(dir: &Path) -> Result<Loaded> {
-        let take = Take::read(dir)?;
-        let Source::Tty { .. } = take.source;
-        let duration = take.duration.ok_or_else(|| {
-            RecError::new(
-                "not_finished",
-                format!("{} has no duration yet; stop it first", take.id),
-            )
-        })?;
+impl TtyTake {
+    fn read(dir: &Path) -> Result<TtyTake> {
         let cast_path = dir.join(model::CAST_FILE);
         let cast_file = std::fs::File::open(&cast_path)
             .map_err(|e| RecError::io(&cast_path.display().to_string(), e))?;
@@ -74,30 +66,64 @@ impl Loaded {
             cols: cast.header.width,
             rows: cast.header.height,
         };
+        Ok(TtyTake { cast, size })
+    }
+
+    fn segments(&self, dir: &Path, duration: f64) -> Result<Vec<tighten::Segment>> {
+        let timeline = model::Timeline::read(dir)?;
+        let points = tighten::analyze(&self.cast.output, &timeline.events, self.size, duration);
+        Ok(tighten::segment(&points, duration))
+    }
+}
+
+/// A finished take, read for export.
+struct Loaded {
+    take: Take,
+    duration: f64,
+    recording: Recording,
+}
+
+enum Recording {
+    Tty(TtyTake),
+    Screen(screen::ScreenTake),
+}
+
+impl Loaded {
+    fn read(dir: &Path) -> Result<Loaded> {
+        let take = Take::read(dir)?;
+        let duration = take.duration.ok_or_else(|| {
+            RecError::new(
+                "not_finished",
+                format!("{} has no duration yet; stop it first", take.id),
+            )
+        })?;
+        let recording = match take.source {
+            Source::Tty { .. } => Recording::Tty(TtyTake::read(dir)?),
+            Source::X11 { .. } => Recording::Screen(screen::ScreenTake::read(dir, &take)?),
+        };
         Ok(Loaded {
             take,
             duration,
-            cast,
-            size,
+            recording,
         })
     }
 
-    fn segments(&self, dir: &Path) -> Result<Vec<tighten::Segment>> {
-        let timeline = model::Timeline::read(dir)?;
-        let points = tighten::analyze(
-            &self.cast.output,
-            &timeline.events,
-            self.size,
-            self.duration,
-        );
-        Ok(tighten::segment(&points, self.duration))
+    /// Tighten reads the terminal stream; screen takes need a pixel-diff pass that comes later.
+    fn tty(&self) -> Result<&TtyTake> {
+        match &self.recording {
+            Recording::Tty(tty) => Ok(tty),
+            Recording::Screen(_) => Err(crate::recorder::not_supported(
+                "--tighten and --plan",
+                "x11",
+            )),
+        }
     }
 }
 
 /// `--plan-out`: the tighten plan for the take at `dir`, without rendering.
 pub fn plan(dir: &Path) -> Result<tighten::Plan> {
     let loaded = Loaded::read(dir)?;
-    let segments = loaded.segments(dir)?;
+    let segments = loaded.tty()?.segments(dir, loaded.duration)?;
     Ok(tighten::Plan::new(
         &loaded.take.id,
         &segments,
@@ -106,86 +132,99 @@ pub fn plan(dir: &Path) -> Result<tighten::Plan> {
     ))
 }
 
+/// One layout's pictures, frame by frame.
+trait Frames {
+    /// Draws frame `f` into `canvas` if it differs from what was last drawn there, and says
+    /// whether it did.
+    fn draw(&mut self, f: u64, canvas: &mut [u8]) -> Result<bool>;
+}
+
+struct TtyFrames<'a> {
+    cast: &'a crate::cast::Cast,
+    map: &'a tighten::TimeMap,
+    parser: vt100::Parser,
+    view: view::View<'a>,
+    next: usize,
+}
+
+impl Frames for TtyFrames<'_> {
+    fn draw(&mut self, f: u64, canvas: &mut [u8]) -> Result<bool> {
+        // Each frame shows the screen as of the end of its interval.
+        let t = self.map.take_time((f + 1) as f64 / FPS as f64);
+        let mut changed = f == 0;
+        while let Some((_, data)) = self.cast.output.get(self.next).filter(|(at, _)| *at <= t) {
+            self.parser.process(data.as_bytes());
+            self.next += 1;
+            changed = true;
+        }
+        Ok(self.view.draw(self.parser.screen(), changed, canvas))
+    }
+}
+
 pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
     let loaded = Loaded::read(dir)?;
     let duration = loaded.duration;
     let (map, tightened) = match &opts.pacing {
         Pacing::Raw => (tighten::TimeMap::identity(duration), None),
         Pacing::Tighten => {
-            let segments = loaded.segments(dir)?;
+            let segments = loaded.tty()?.segments(dir, duration)?;
             let (map, report) = tighten::plan(&segments, &tighten::POLICY, duration);
             (map, Some(report))
         }
         Pacing::Plan(plan) => {
-            let segments = loaded.segments(dir)?;
+            let segments = loaded.tty()?.segments(dir, duration)?;
             let cuts = plan.cuts(&segments)?;
             let (map, report) =
                 tighten::retime(&segments, &cuts, tighten::POLICY.preroll, duration);
             (map, Some(report))
         }
     };
-    let Loaded { cast, size, .. } = loaded;
     let ffmpeg = find_ffmpeg()?;
     let fonts = render::Fonts::load();
-    let frames = ((map.duration() * FPS as f64).round() as u64).max(1);
 
     let mut out = Vec::new();
     for preset in &opts.layouts {
-        let viewport = layout::viewport(preset, size, fonts.cell_metrics(), opts.font_px)?;
-        let mut view = view::View::new(&fonts, opts.theme, viewport, preset);
         let path = dir.join(format!("export-{}.mp4", preset.slug));
-        eprintln!(
-            "rec: exporting {} ({frames} frames, {}px font, {} viewport)",
-            path.display(),
-            viewport.font_px(),
-            viewport.kind()
-        );
-        let mut enc = Encoder::spawn(&ffmpeg, &path, preset.width, preset.height)?;
-        let mut parser = vt100::Parser::new(size.rows, size.cols, 0);
-        let ring = opts
-            .border
-            .then(|| border::Target::screen(viewport.panel()));
-        let mut term = vec![0u8; (preset.width * preset.height * 4) as usize];
-        let mut framed = if ring.is_some() {
-            term.clone()
-        } else {
-            Vec::new()
+        let (frames, kind) = match &loaded.recording {
+            Recording::Tty(tty) => {
+                let frames = ((map.duration() * FPS as f64).round() as u64).max(1);
+                let viewport =
+                    layout::viewport(preset, tty.size, fonts.cell_metrics(), opts.font_px)?;
+                eprintln!(
+                    "rec: exporting {} ({frames} frames, {}px font, {} viewport)",
+                    path.display(),
+                    viewport.font_px(),
+                    viewport.kind()
+                );
+                let mut source = TtyFrames {
+                    cast: &tty.cast,
+                    map: &map,
+                    parser: vt100::Parser::new(tty.size.rows, tty.size.cols, 0),
+                    view: view::View::new(&fonts, opts.theme, viewport, preset),
+                    next: 0,
+                };
+                let ring = opts.border.then(|| viewport.panel());
+                encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
+                (frames, viewport.kind())
+            }
+            Recording::Screen(take) => {
+                let frames = take.frames(duration);
+                let viewport = layout::screen_viewport(preset, take.width, take.height);
+                eprintln!(
+                    "rec: exporting {} ({frames} frames, {} viewport)",
+                    path.display(),
+                    viewport.kind()
+                );
+                let mut source =
+                    screen::ScreenFrames::new(&ffmpeg, take, preset, viewport, opts.theme.canvas)?;
+                let ring = opts.border.then(|| viewport.panel());
+                encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
+                (frames, viewport.kind())
+            }
         };
-        let mut painted: Option<(border::Look, border::Overlay)> = None;
-        let mut next = 0;
-        for f in 0..frames {
-            // Each frame shows the screen as of the end of its interval.
-            let t = map.take_time((f + 1) as f64 / FPS as f64);
-            let mut changed = f == 0;
-            while let Some((_, data)) = cast.output.get(next).filter(|(at, _)| *at <= t) {
-                parser.process(data.as_bytes());
-                next += 1;
-                changed = true;
-            }
-            let drawn = view.draw(parser.screen(), changed, &mut term);
-            let Some(ring) = &ring else {
-                enc.write(&term)?;
-                continue;
-            };
-            let look = border::look(f as f64 / FPS as f64);
-            let new_look = !matches!(&painted, Some((shown, _)) if *shown == look);
-            if new_look {
-                painted = Some((look, ring.paint(&look, preset.width, preset.height)));
-            }
-            if drawn || new_look {
-                framed.copy_from_slice(&term);
-                painted
-                    .as_ref()
-                    .expect("painted above")
-                    .1
-                    .apply(&mut framed);
-            }
-            enc.write(&framed)?;
-        }
-        enc.finish()?;
         out.push(Export {
             layout: preset.aspect,
-            viewport: viewport.kind(),
+            viewport: kind,
             path,
             width: preset.width,
             height: preset.height,
@@ -196,6 +235,48 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
     Ok(out)
 }
 
+/// Encodes `count` frames of `source`, with the attention border around `ring` if given.
+fn encode(
+    source: &mut dyn Frames,
+    count: u64,
+    preset: &layout::Preset,
+    ring: Option<layout::Rect>,
+    ffmpeg: &Path,
+    path: &Path,
+) -> Result<()> {
+    let mut enc = Encoder::spawn(ffmpeg, path, preset.width, preset.height)?;
+    let ring = ring.map(border::Target::screen);
+    let mut canvas = vec![0u8; (preset.width * preset.height * 4) as usize];
+    let mut framed = if ring.is_some() {
+        canvas.clone()
+    } else {
+        Vec::new()
+    };
+    let mut painted: Option<(border::Look, border::Overlay)> = None;
+    for f in 0..count {
+        let drawn = source.draw(f, &mut canvas)?;
+        let Some(ring) = &ring else {
+            enc.write(&canvas)?;
+            continue;
+        };
+        let look = border::look(f as f64 / FPS as f64);
+        let new_look = !matches!(&painted, Some((shown, _)) if *shown == look);
+        if new_look {
+            painted = Some((look, ring.paint(&look, preset.width, preset.height)));
+        }
+        if drawn || new_look {
+            framed.copy_from_slice(&canvas);
+            painted
+                .as_ref()
+                .expect("painted above")
+                .1
+                .apply(&mut framed);
+        }
+        enc.write(&framed)?;
+    }
+    enc.finish()
+}
+
 /// The grid that fills `layout` at a legible size in the embedded font, for `--for`.
 pub fn grid_for(layout: &str) -> Result<model::Size> {
     let preset = layout::preset(layout)?;
@@ -203,6 +284,17 @@ pub fn grid_for(layout: &str) -> Result<model::Size> {
         &preset,
         render::Fonts::load().cell_metrics(),
     ))
+}
+
+/// The x11 screen that fills `layout` pixel for pixel inside its margin, for `--for`.
+pub fn screen_for(layout: &str) -> Result<model::Frame> {
+    let (w, h) = layout::screen_for(&layout::preset(layout)?);
+    Ok(model::Frame {
+        x: 0,
+        y: 0,
+        width: w,
+        height: h,
+    })
 }
 
 pub fn find_on_path(name: &str) -> Option<PathBuf> {

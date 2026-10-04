@@ -87,6 +87,14 @@ stale=$("$REC" wait --new --text 'echo hello' --timeout 1 2>/dev/null) && fail "
 check "wait --new ignores what was echoed before the last input" 'j["error"]["code"] == "timeout"' "$stale"
 run wait --text 'echo hello' --timeout 1 >/dev/null || fail "plain wait no longer matches the screen"
 
+run type 'for i in 1 2 3 4 5 6; do echo tick-$i; sleep 0.3; done' >/dev/null
+run key Return >/dev/null
+idle=$(run wait --idle 1 --timeout 10)
+check "wait --idle returns idle" 'j["idle"] is True and j["t"] > 0' "$idle"
+check "wait --idle holds until the output stops" '"tick-6" in j["text"]' "$(run screen)"
+quick=$("$REC" wait --idle 5 --timeout 1 2>/dev/null) && fail "wait --idle outlasted its timeout"
+check "wait --idle times out" 'j["error"]["code"] == "timeout"' "$quick"
+
 # Dead air, like an agent thinking between steps, for --tighten to cut.
 sleep 3
 

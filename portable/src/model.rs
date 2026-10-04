@@ -10,6 +10,7 @@ pub const TIMELINE_FILE: &str = "timeline.json";
 pub const MARKERS_FILE: &str = "markers.jsonl";
 pub const LOG_FILE: &str = "recorder.log";
 pub const SOCKET_FILE: &str = "control.sock";
+pub const SCREEN_FILE: &str = "screen.mp4";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Size {
@@ -33,16 +34,123 @@ impl std::str::FromStr for Size {
     }
 }
 
+/// `WIDTHxHEIGHT` as typed on the command line: a tty grid or an x11 screen in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dims {
+    pub w: u32,
+    pub h: u32,
+}
+
+impl std::str::FromStr for Dims {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        let (w, h) = s
+            .split_once(['x', 'X'])
+            .ok_or_else(|| format!("expected WIDTHxHEIGHT, got {s:?}"))?;
+        let w = w.parse().map_err(|_| format!("bad width in {s:?}"))?;
+        let h = h.parse().map_err(|_| format!("bad height in {s:?}"))?;
+        Ok(Dims { w, h })
+    }
+}
+
+impl TryFrom<Dims> for Size {
+    type Error = String;
+
+    fn try_from(d: Dims) -> std::result::Result<Size, String> {
+        format!("{}x{}", d.w, d.h).parse()
+    }
+}
+
+/// An x11 screen. Always at the origin: `rec` owns the whole virtual display.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Frame {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl TryFrom<Dims> for Frame {
+    type Error = String;
+
+    /// H.264 in yuv420p needs even sides.
+    fn try_from(d: Dims) -> std::result::Result<Frame, String> {
+        if d.w < 64 || d.h < 64 || d.w > 7680 || d.h > 7680 {
+            return Err(format!("screen {}x{} must be 64..=7680 pixels a side", d.w, d.h));
+        }
+        if d.w % 2 == 1 || d.h % 2 == 1 {
+            return Err(format!("screen {}x{} needs even sides for H.264", d.w, d.h));
+        }
+        Ok(Frame {
+            x: 0,
+            y: 0,
+            width: d.w,
+            height: d.h,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Source {
-    Tty { command: Vec<String>, size: Size },
+    Tty {
+        command: Vec<String>,
+        size: Size,
+    },
+    X11 {
+        /// The app `rec` launched into the display, if any.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        command: Vec<String>,
+        frame: Frame,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Track {
-    Term { file: String, offset: f64 },
+    Term {
+        file: String,
+        offset: f64,
+    },
+    Screen {
+        file: String,
+        offset: f64,
+        width: u32,
+        height: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Button {
+    Left,
+    Middle,
+    Right,
+}
+
+impl Button {
+    /// The X11 core protocol button number.
+    pub fn x11(self) -> u8 {
+        match self {
+            Button::Left => 1,
+            Button::Middle => 2,
+            Button::Right => 3,
+        }
+    }
+}
+
+impl std::str::FromStr for Button {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s {
+            "left" => Ok(Button::Left),
+            "middle" => Ok(Button::Middle),
+            "right" => Ok(Button::Right),
+            _ => Err(format!("expected left, middle or right, got {s:?}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +204,16 @@ pub enum Event {
     Marker {
         label: String,
     },
+    /// `x` and `y` are normalized 0..1 to the source frame, top-left origin.
+    Cursor {
+        x: f64,
+        y: f64,
+    },
+    Click {
+        x: f64,
+        y: f64,
+        button: Button,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -135,6 +253,13 @@ pub struct Active {
     pub take: PathBuf,
     pub started_at: String,
     pub source: Source,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+/// A pixel position as a 0..1 fraction of `extent`, rounded to six places.
+pub fn normalize(px: f64, extent: u32) -> f64 {
+    round_t(px / extent as f64)
 }
 
 /// Seconds rounded to microseconds, so JSON stays short and stable.
@@ -178,6 +303,44 @@ mod tests {
             serde_json::to_string(&plain).unwrap(),
             r#"{"t":1.0,"type":"type","text":"ls"}"#
         );
+    }
+
+    #[test]
+    fn x11_source_and_click_serialize_like_the_spec() {
+        let src = Source::X11 {
+            command: vec![],
+            frame: Frame::try_from(Dims { w: 1920, h: 1080 }).unwrap(),
+        };
+        assert_eq!(
+            serde_json::to_string(&src).unwrap(),
+            r#"{"kind":"x11","frame":{"x":0,"y":0,"width":1920,"height":1080}}"#
+        );
+        let click = TimedEvent {
+            t: 1.2,
+            event: Event::Click {
+                x: normalize(797.0, 1920),
+                y: normalize(249.0, 1080),
+                button: Button::Left,
+            },
+        };
+        assert_eq!(
+            serde_json::to_string(&click).unwrap(),
+            r#"{"t":1.2,"type":"click","x":0.415104,"y":0.230556,"button":"left"}"#
+        );
+    }
+
+    #[test]
+    fn normalized_coordinates_span_the_frame() {
+        assert_eq!(normalize(0.0, 1920), 0.0);
+        assert_eq!(normalize(960.0, 1920), 0.5);
+        assert_eq!(normalize(1080.0, 1080), 1.0);
+    }
+
+    #[test]
+    fn x11_screens_need_even_sides() {
+        assert!(Frame::try_from(Dims { w: 1080, h: 1920 }).is_ok());
+        assert!(Frame::try_from(Dims { w: 1081, h: 1920 }).is_err());
+        assert!(Frame::try_from(Dims { w: 10, h: 10 }).is_err());
     }
 
     #[test]
