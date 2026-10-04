@@ -87,6 +87,9 @@ stale=$("$REC" wait --new --text 'echo hello' --timeout 1 2>/dev/null) && fail "
 check "wait --new ignores what was echoed before the last input" 'j["error"]["code"] == "timeout"' "$stale"
 run wait --text 'echo hello' --timeout 1 >/dev/null || fail "plain wait no longer matches the screen"
 
+# Dead air, like an agent thinking between steps, for --tighten to cut.
+sleep 3
+
 again=$("$REC" start --tty -- true 2>/dev/null) && fail "second start succeeded while recording"
 check "second start names the active take" \
   'j["error"]["code"] == "already_recording" and "'"$(basename "$TAKE")"'" in j["error"]["message"]' "$again"
@@ -144,6 +147,18 @@ fills_9x16() {
   echo "ok: $what fills the 9:16 frame" >&2
 }
 fills_9x16 "$TAKE/frame-9x16.png" "100x30 take"
+
+tight=$(run export "$TAKE" --layout 16:9 --tighten)
+check "--tighten reports the raw take length" \
+  'abs(j["exports"][0]["tightened"]["duration_raw"] - '"$duration"') < 0.01' "$tight"
+check "--tighten is shorter than the take" \
+  'j["exports"][0]["tightened"]["duration"] < '"$duration"' - 1' "$tight"
+check "--tighten segments run back to back from 0" \
+  'all(a["out"][1] == b["out"][0] and a["take"][1] == b["take"][0] for a, b in zip(j["exports"][0]["tightened"]["segments"], j["exports"][0]["tightened"]["segments"][1:])) and j["exports"][0]["tightened"]["segments"][0]["take"][0] == 0' "$tight"
+tight_duration=$(printf '%s' "$tight" | json 'j["exports"][0]["tightened"]["duration"]')
+probe=$(ffprobe -v error -show_entries format=duration -of json "$TAKE/export-16x9.mp4")
+check "--tighten video is as long as tightened.duration ($tight_duration)" \
+  'abs(float(j["format"]["duration"]) - '"$tight_duration"') <= 0.1' "$probe"
 
 both=$("$REC" start --tty --for 9:16 --size 80x24 -- true 2>/dev/null) && fail "--for with --size succeeded"
 check "--for with --size is bad_args" 'j["error"]["code"] == "bad_args"' "$both"

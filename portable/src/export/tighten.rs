@@ -53,8 +53,8 @@ pub enum Kind {
 pub struct Segment {
     pub kind: Kind,
     pub take: (f64, f64),
-    /// For quiet segments (Busy, Settled, End): words on screen that were not on the previous
-    /// quiet screen, which sets how long a viewer needs to read it.
+    /// For quiet segments (Busy, Settled, End): words on screen that no earlier quiet screen
+    /// showed, which sets how long a viewer needs to read it.
     pub words: usize,
 }
 
@@ -273,15 +273,14 @@ pub fn segment(points: &[Point], duration: f64) -> Vec<Segment> {
         false => {}
     }
 
-    let mut quiet_text = "";
+    let mut read = Read::default();
     for seg in segs.iter_mut() {
         if matches!(seg.kind, Kind::Busy | Kind::Settled | Kind::End) {
             let shown = match text_at.partition_point(|(t, _)| *t <= seg.take.0) {
                 0 => "",
                 n => text_at[n - 1].1,
             };
-            seg.words = new_words(quiet_text, shown);
-            quiet_text = shown;
+            seg.words = read.show(shown);
         }
     }
     segs
@@ -303,23 +302,31 @@ impl Role {
     }
 }
 
-/// Words in `now` beyond those already in `before`, counted with multiplicity.
-fn new_words(before: &str, now: &str) -> usize {
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let wordy = |w: &&str| w.chars().any(char::is_alphanumeric);
-    for w in before.split_whitespace().filter(wordy) {
-        *seen.entry(w).or_default() += 1;
+/// What the viewer has already read: each word with the most times one quiet screen showed it.
+/// A screen that comes back, like a shell after a full-screen program exits, reads as old.
+#[derive(Default)]
+struct Read<'a> {
+    seen: std::collections::HashMap<&'a str, usize>,
+}
+
+impl<'a> Read<'a> {
+    /// Counts the words on `screen` beyond what was already read, then remembers them.
+    fn show(&mut self, screen: &'a str) -> usize {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for w in screen
+            .split_whitespace()
+            .filter(|w| w.chars().any(char::is_alphanumeric))
+        {
+            *counts.entry(w).or_default() += 1;
+        }
+        let mut new = 0;
+        for (w, n) in counts {
+            let seen = self.seen.entry(w).or_default();
+            new += n.saturating_sub(*seen);
+            *seen = (*seen).max(n);
+        }
+        new
     }
-    now.split_whitespace()
-        .filter(wordy)
-        .filter(|w| match seen.get_mut(w) {
-            Some(n) if *n > 0 => {
-                *n -= 1;
-                false
-            }
-            _ => true,
-        })
-        .count()
 }
 
 /// A run of output time that plays `take` linearly.
@@ -621,10 +628,12 @@ mod tests {
     }
 
     #[test]
-    fn new_words_counts_only_what_appeared() {
-        assert_eq!(new_words("a b c", "a b c d d"), 2);
-        assert_eq!(new_words("", "hello — world"), 2);
-        assert_eq!(new_words("x y", "y"), 0);
+    fn words_count_once_however_often_a_screen_returns() {
+        let mut read = Read::default();
+        assert_eq!(read.show("$ ls\nbin etc usr"), 4);
+        assert_eq!(read.show("PID COMMAND top — 1.2%"), 4);
+        assert_eq!(read.show("$ ls\nbin etc usr\n$ echo hi\nhi"), 3);
+        assert_eq!(read.show("hi hi hi"), 1);
     }
 
     fn screen(rows: &[&str]) -> vt100::Parser {
