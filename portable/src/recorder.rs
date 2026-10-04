@@ -7,13 +7,14 @@ use crate::model::{
     self, round_t, Active, Event, Marker, Size, Source, Take, TakeStatus, TimedEvent, Timeline,
     Track,
 };
+use crate::output::OutputLog;
 use crate::paths;
 use crate::protocol::{self, Cursor, Request, Response, ScreenText};
 use portable_pty::{CommandBuilder, PtySize};
 use std::io::{BufRead, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -57,6 +58,10 @@ struct Shared {
     source: Source,
     phase: Mutex<Phase>,
     screen: Mutex<vt100::Parser>,
+    output: Mutex<OutputLog>,
+    /// Output cursor taken just before the last input byte reached the PTY, so whatever the
+    /// program writes in response lands after it.
+    input_mark: AtomicU64,
     pty_in: Mutex<Box<dyn Write + Send>>,
     events: Mutex<Vec<TimedEvent>>,
     markers: Mutex<std::fs::File>,
@@ -74,6 +79,8 @@ impl Shared {
 
     fn send_input(&self, bytes: &[u8]) -> Result<()> {
         let mut w = self.pty_in.lock().unwrap();
+        let mark = self.output.lock().unwrap().cursor();
+        self.input_mark.store(mark, Ordering::Relaxed);
         w.write_all(bytes)
             .and_then(|_| w.flush())
             .map_err(|e| RecError::io("write to pty", e))
@@ -199,6 +206,8 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
         source: take.source.clone(),
         phase: Mutex::new(Phase::Recording),
         screen: Mutex::new(vt100::Parser::new(size.rows, size.cols, 0)),
+        output: Mutex::new(OutputLog::new(OutputLog::CAP)),
+        input_mark: AtomicU64::new(0),
         pty_in: Mutex::new(writer),
         events: Mutex::new(Vec::new()),
         markers: Mutex::new(markers),
@@ -224,6 +233,7 @@ fn run(take: &mut Take, dir: &Path, opts: &RecordOptions) -> Result<()> {
                 };
                 let t = shared.t0.elapsed().as_secs_f64();
                 shared.screen.lock().unwrap().process(&buf[..n]);
+                shared.output.lock().unwrap().push(&buf[..n]);
                 if let Err(e) = cast.output(t, &utf8.push(&buf[..n])) {
                     let _ = shared.tx.send(Msg::Finish {
                         reason: FinishReason::Failed(RecError::io("write term.cast", e)),
@@ -437,6 +447,13 @@ fn serve(req: Request, shared: &Shared) -> Result<Response> {
                     rows,
                     cursor: Cursor { row, col },
                 },
+            })
+        }
+        Request::Output => {
+            let mark = shared.input_mark.load(Ordering::Relaxed);
+            Ok(Response::Output {
+                t: shared.now(),
+                text: shared.output.lock().unwrap().since(mark).to_string(),
             })
         }
         Request::Mark { label } => {

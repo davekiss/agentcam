@@ -3,6 +3,7 @@ mod error;
 mod export;
 mod keys;
 mod model;
+mod output;
 mod paths;
 mod protocol;
 mod recorder;
@@ -53,6 +54,9 @@ enum Cmd {
     Wait {
         #[arg(long)]
         text: String,
+        /// Match only output written since the last `type` or `key`, instead of the screen.
+        #[arg(long)]
+        new: bool,
         /// Seconds.
         #[arg(long, default_value_t = 30.0)]
         timeout: f64,
@@ -144,7 +148,7 @@ fn run(cmd: Cmd) -> Result<Value> {
             Response::Screen { screen, .. } => Ok(json!(screen)),
             other => unexpected(other),
         },
-        Cmd::Wait { text, timeout } => wait(&text, timeout),
+        Cmd::Wait { text, new, timeout } => wait(&text, new, timeout),
         Cmd::Export {
             take,
             layouts,
@@ -316,22 +320,28 @@ fn status() -> Result<Value> {
     }
 }
 
-fn wait(pattern: &str, timeout: f64) -> Result<Value> {
+fn wait(pattern: &str, new: bool, timeout: f64) -> Result<Value> {
     let re = regex::Regex::new(pattern).map_err(|e| RecError::new("bad_regex", e.to_string()))?;
     let take = active()?.take;
+    let (req, what) = if new {
+        (Request::Output, "new output")
+    } else {
+        (Request::Screen, "screen")
+    };
     let deadline = Instant::now() + Duration::from_secs_f64(timeout.max(0.0));
     loop {
-        match protocol::call(&take, &Request::Screen)? {
-            Response::Screen { t, screen } if re.is_match(&screen.text) => {
-                return Ok(json!({ "matched": true, "t": t }))
-            }
-            Response::Screen { .. } => {}
+        let (t, text) = match protocol::call(&take, &req)? {
+            Response::Screen { t, screen } => (t, screen.text),
+            Response::Output { t, text } => (t, text),
             other => return unexpected(other),
+        };
+        if re.is_match(&text) {
+            return Ok(json!({ "matched": true, "t": t }));
         }
         if Instant::now() >= deadline {
             return Err(RecError::new(
                 "timeout",
-                format!("screen did not match {pattern:?} within {timeout}s"),
+                format!("{what} did not match {pattern:?} within {timeout}s"),
             ));
         }
         std::thread::sleep(Duration::from_millis(50));

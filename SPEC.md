@@ -135,7 +135,8 @@ All output is a single JSON object on stdout. Human-readable progress goes to st
 - `rec type <text> [--delay <ms>] [--secret]` types text at a human-looking pace (default 40 ms per character).
 - `rec key <combo>` sends a key or chord, such as `Return`, `ctrl+c`, or `alt+tab`.
 - `rec click <x> <y> [--button left]` and `rec move <x> <y>` work on `x11` only. Coordinates are pixels of the source frame.
-- `rec wait --text <regex> [--timeout <s>]` blocks until the current screen matches the pattern, so agents wait on output instead of sleeping. It prints `{"matched": true, "t"}`, or exits with error `timeout`. On `tty` it matches the emulated screen. On `x11` it needs OCR and comes later.
+- `rec wait --text <regex> [--new] [--timeout <s>]` blocks until the current screen matches the pattern, so agents wait on output instead of sleeping. It prints `{"matched": true, "t"}`, or exits with error `timeout`. On `tty` it matches the emulated screen. On `x11` it needs OCR and comes later.
+  - `--new` (`tty` only) matches the program's output since the last `type` or `key` instead of the screen, so the echo of a command typed earlier does not count. The recorder marks its output stream just before each input byte reaches the PTY, and `--new` matches everything written after that mark, as plain text with escape sequences and carriage returns removed. Output that arrived between the input and the start of the wait still counts, so `rec key Return; rec wait --new` has no race, and repeating the wait gives the same answer. With no input sent yet, it covers all output so far. The recorder holds the last 1 MiB of output text.
 - `rec screen [--png <path>]` prints what is on screen now: `{"text", "cols", "rows", "cursor"}` for `tty`, or writes a PNG and prints `{"png"}`. This is how the agent checks its work mid-take.
 
 Each driving command records itself in the timeline and returns `{"t"}` on the take clock.

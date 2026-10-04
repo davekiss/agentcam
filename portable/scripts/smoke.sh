@@ -78,6 +78,15 @@ check "screen has the grid size and cursor" \
   'j["cols"] == 100 and j["rows"] == 30 and 0 <= j["cursor"]["row"] < 30 and 0 <= j["cursor"]["col"] < 100' "$screen"
 check "screen shows the shell output" '"smoke-42" in j["text"]' "$screen"
 
+run type 'echo hello-$((1+1))' >/dev/null
+run key Return >/dev/null
+# The reply lands before the wait starts; --new still sees it because it counts from the last input.
+sleep 0.3
+run wait --new --text 'hello-2' --timeout 10 >/dev/null || fail "wait --new missed hello-2"
+stale=$("$REC" wait --new --text 'echo hello' --timeout 1 2>/dev/null) && fail "wait --new matched the echoed command"
+check "wait --new ignores what was echoed before the last input" 'j["error"]["code"] == "timeout"' "$stale"
+run wait --text 'echo hello' --timeout 1 >/dev/null || fail "plain wait no longer matches the screen"
+
 again=$("$REC" start --tty -- true 2>/dev/null) && fail "second start succeeded while recording"
 check "second start names the active take" \
   'j["error"]["code"] == "already_recording" and "'"$(basename "$TAKE")"'" in j["error"]["message"]' "$again"

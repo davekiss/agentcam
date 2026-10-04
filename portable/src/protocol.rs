@@ -20,6 +20,8 @@ pub enum Request {
         combo: String,
     },
     Screen,
+    /// Plain-text output written since the last input `rec` sent.
+    Output,
     Mark {
         label: String,
     },
@@ -60,6 +62,10 @@ pub enum Response {
     Screen {
         t: f64,
         screen: ScreenText,
+    },
+    Output {
+        t: f64,
+        text: String,
     },
     Stopped {
         take: Box<Take>,
