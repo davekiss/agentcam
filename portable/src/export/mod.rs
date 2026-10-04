@@ -1,9 +1,11 @@
 //! `rec export`: replay term.cast through vt100 at 30 fps and encode with ffmpeg.
 
 mod border;
+mod camera;
 pub mod layout;
 mod render;
 pub mod theme;
+mod view;
 
 use crate::error::{RecError, Result};
 use crate::model::{self, Source, Take};
@@ -24,6 +26,8 @@ pub struct ExportOptions {
 #[derive(Debug, Serialize)]
 pub struct Export {
     pub layout: &'static str,
+    /// `fit` shows the whole grid; `follow` crops to a window that pans with the action.
+    pub viewport: &'static str,
     pub path: PathBuf,
     pub width: u32,
     pub height: u32,
@@ -53,50 +57,51 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
 
     let mut out = Vec::new();
     for preset in &opts.layouts {
-        let fit = layout::fit(preset, size, fonts.cell_metrics(), opts.font_px)?;
-        let mut renderer = render::Renderer::new(&fonts, opts.theme, fit, preset.width, preset.height);
+        let viewport = layout::viewport(preset, size, fonts.cell_metrics(), opts.font_px)?;
+        let mut view = view::View::new(&fonts, opts.theme, viewport, preset);
         let path = dir.join(format!("export-{}.mp4", preset.slug));
         eprintln!(
-            "rec: exporting {} ({frames} frames, {}px font)",
+            "rec: exporting {} ({frames} frames, {}px font, {} viewport)",
             path.display(),
-            fit.font_px
+            viewport.font_px(),
+            viewport.kind()
         );
         let mut enc = Encoder::spawn(&ffmpeg, &path, preset.width, preset.height)?;
         let mut parser = vt100::Parser::new(size.rows, size.cols, 0);
-        let ring = opts.border.then(|| border::Target::screen(fit.panel));
-        let mut term = vec![0u8; renderer.frame_len()];
+        let ring = opts.border.then(|| border::Target::screen(viewport.panel()));
+        let mut term = vec![0u8; (preset.width * preset.height * 4) as usize];
         let mut framed = if ring.is_some() { term.clone() } else { Vec::new() };
-        let mut shown = None;
+        let mut painted: Option<(border::Look, border::Overlay)> = None;
         let mut next = 0;
-        let mut dirty = true;
         for f in 0..frames {
             // Each frame shows the screen as of the end of its interval.
             let t = (f + 1) as f64 / FPS as f64;
+            let mut changed = f == 0;
             while let Some((_, data)) = cast.output.get(next).filter(|(at, _)| *at <= t) {
                 parser.process(data.as_bytes());
                 next += 1;
-                dirty = true;
+                changed = true;
             }
-            if dirty {
-                renderer.render(parser.screen(), &mut term);
-            }
+            let drawn = view.draw(parser.screen(), changed, &mut term);
             let Some(ring) = &ring else {
-                dirty = false;
                 enc.write(&term)?;
                 continue;
             };
             let look = border::look(f as f64 / FPS as f64);
-            if dirty || shown != Some(look) {
-                framed.copy_from_slice(&term);
-                ring.draw(&look, &mut framed, preset.width, preset.height);
-                shown = Some(look);
+            let new_look = !matches!(&painted, Some((shown, _)) if *shown == look);
+            if new_look {
+                painted = Some((look, ring.paint(&look, preset.width, preset.height)));
             }
-            dirty = false;
+            if drawn || new_look {
+                framed.copy_from_slice(&term);
+                painted.as_ref().expect("painted above").1.apply(&mut framed);
+            }
             enc.write(&framed)?;
         }
         enc.finish()?;
         out.push(Export {
             layout: preset.aspect,
+            viewport: viewport.kind(),
             path,
             width: preset.width,
             height: preset.height,

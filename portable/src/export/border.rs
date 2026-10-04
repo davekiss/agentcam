@@ -211,9 +211,17 @@ impl Target {
     }
 
     /// Composites the ring at `look` over an RGBA frame of `width` x `height`.
+    #[cfg(test)]
     pub fn draw(&self, look: &Look, buf: &mut [u8], width: u32, height: u32) {
+        self.paint(look, width, height).apply(buf);
+    }
+
+    /// The ring at `look` for a frame of `width` x `height`, ready to composite over any
+    /// number of frames that share that look.
+    pub fn paint(&self, look: &Look, width: u32, height: u32) -> Overlay {
+        let mut overlay = Overlay(Vec::new());
         if look.opacity <= 0.001 {
-            return;
+            return overlay;
         }
         let u = self.unit;
         let outer = look.width as f32 * u;
@@ -228,7 +236,6 @@ impl Target {
         });
         let grains: [Grain; 3] = std::array::from_fn(|i| Grain::new(i, look.boil_frame));
         let fade = look.opacity as f32;
-        let lin = Linear::get();
 
         let [l, t, r, b] = self.shape.bounds();
         let reach = outer + wander;
@@ -266,13 +273,36 @@ impl Target {
                 }
                 let a = coverage * fade;
                 if a > 0.0 {
-                    let p = row + x as usize * 4;
-                    for c in 0..3 {
-                        let under = lin.decode[buf[p + c] as usize];
-                        buf[p + c] = lin.encode(under + (ink[c] - under) * a);
-                    }
+                    overlay.0.push(Dab {
+                        at: row + x as usize * 4,
+                        ink,
+                        a,
+                    });
                 }
                 x += 1;
+            }
+        }
+        overlay
+    }
+}
+
+/// The inked pixels of one ring look: where each falls in an RGBA frame and how it blends.
+pub struct Overlay(Vec<Dab>);
+
+struct Dab {
+    at: usize,
+    /// Linear-light color of the multiplied plates.
+    ink: [f32; 3],
+    a: f32,
+}
+
+impl Overlay {
+    pub fn apply(&self, buf: &mut [u8]) {
+        let lin = Linear::get();
+        for d in &self.0 {
+            for c in 0..3 {
+                let under = lin.decode[buf[d.at + c] as usize];
+                buf[d.at + c] = lin.encode(under + (d.ink[c] - under) * d.a);
             }
         }
     }

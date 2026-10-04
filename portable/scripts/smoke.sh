@@ -126,5 +126,43 @@ for spec in "16x9 1920 1080" "9x16 1080 1920"; do
   ffmpeg -v error -y -ss "$mark_t" -i "$mp4" -frames:v 1 "$TAKE/frame-$slug.png" || fail "frame extract for $slug"
   [ -s "$TAKE/frame-$slug.png" ] || fail "frame-$slug.png missing"
 done
+check "a wide grid fits 16:9 whole and follows the action in 9:16" \
+  '[e["viewport"] for e in j["exports"]] == ["fit", "follow"]' "$exported"
+
+# panel_at <png> <x> <y> is true when that pixel is the terminal panel (#17191f), not the canvas (#0b0c10).
+panel_at() {
+  local rgb
+  rgb=$(ffmpeg -v error -i "$1" -vf "crop=1:1:$2:$3" -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | xargs)
+  python3 -c 'import sys; r,g,b=map(int,sys.argv[1:]); print(r+g+b > (11+12+16+23+25+31)//2)' $rgb
+}
+fills_9x16() {
+  local png=$1 what=$2
+  for xy in "540 60" "540 1860" "60 960" "1020 960"; do
+    read -r x y <<<"$xy"
+    [ "$(panel_at "$png" "$x" "$y")" = "True" ] || fail "$what: ($x, $y) is empty canvas, not terminal"
+  done
+  echo "ok: $what fills the 9:16 frame" >&2
+}
+fills_9x16 "$TAKE/frame-9x16.png" "100x30 take"
+
+both=$("$REC" start --tty --for 9:16 --size 80x24 -- true 2>/dev/null) && fail "--for with --size succeeded"
+check "--for with --size is bad_args" 'j["error"]["code"] == "bad_args"' "$both"
+
+started=$(run start --tty --for 9:16 --out "$OUT" -- bash --norc)
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+run type 'ls --color=always / ; echo vertical-$((6*7))' >/dev/null
+run key Return >/dev/null
+run wait --text 'vertical-42' --timeout 10 >/dev/null || fail "vertical take never printed"
+vertical=$(run stop)
+check "--for 9:16 records the 53x45 grid that fills 9:16" \
+  'j["source"]["size"] == {"cols": 53, "rows": 45}' "$vertical"
+exported=$(run export "$TAKE" --layout 9:16)
+check "--for 9:16 exports 9:16 whole, with no crop" \
+  '[(e["layout"], e["viewport"], e["width"], e["height"]) for e in j["exports"]] == [("9:16", "fit", 1080, 1920)]' "$exported"
+mp4="$TAKE/export-9x16.mp4"
+probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of json "$mp4")
+check "--for 9:16 export is 1080x1920" 'j["streams"][0] == {"width": 1080, "height": 1920}' "$probe"
+ffmpeg -v error -y -sseof -0.2 -i "$mp4" -frames:v 1 "$TAKE/frame-9x16.png" || fail "frame extract for --for 9:16"
+fills_9x16 "$TAKE/frame-9x16.png" "--for 9:16 take"
 
 echo "PASS: $TAKE"

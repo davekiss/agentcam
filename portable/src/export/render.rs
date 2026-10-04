@@ -248,7 +248,7 @@ impl<'a> Renderer<'a> {
     }
 }
 
-fn full(w: u32, h: u32) -> Rect {
+pub(super) fn full(w: u32, h: u32) -> Rect {
     Rect { x: 0, y: 0, w, h }
 }
 
@@ -257,7 +257,7 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     [l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2])]
 }
 
-fn fill(buf: &mut [u8], stride_px: u32, r: Rect, c: Rgb) {
+pub(super) fn fill(buf: &mut [u8], stride_px: u32, r: Rect, c: Rgb) {
     let px = [c[0], c[1], c[2], 255];
     for y in r.y..r.y + r.h {
         let start = ((y * stride_px + r.x) * 4) as usize;

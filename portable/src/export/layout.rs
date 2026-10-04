@@ -213,6 +213,14 @@ impl Viewport {
         }
     }
 
+    /// How `rec export` reports it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Viewport::Fit(_) => "fit",
+            Viewport::Follow(_) => "follow",
+        }
+    }
+
     pub fn font_px(&self) -> f32 {
         match self {
             Viewport::Fit(f) => f.font_px,
