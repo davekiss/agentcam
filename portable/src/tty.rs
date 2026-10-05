@@ -2,7 +2,7 @@
 
 use crate::cast::{CastWriter, Header, Utf8Buffer};
 use crate::error::{RecError, Result};
-use crate::keys::{self, CursorMode};
+use crate::keys::{self, CursorMode, Keyboard};
 use crate::model::{self, Button, Size, Track};
 use crate::mouse::{mouse_off, Action, Protocol};
 use crate::output::OutputLog;
@@ -165,6 +165,19 @@ impl Tty {
             .map_err(|e| RecError::io("write to pty", e))
     }
 
+    fn keyboard(&self) -> Keyboard {
+        let parser = self.stream.screen.lock().unwrap();
+        let screen = parser.screen();
+        Keyboard {
+            cursor: if screen.application_cursor() {
+                CursorMode::Application
+            } else {
+                CursorMode::Normal
+            },
+            kitty: parser.callbacks().kitty_flags(screen),
+        }
+    }
+
     fn mouse(&self) -> Protocol {
         let parser = self.stream.screen.lock().unwrap();
         let screen = parser.screen();
@@ -194,7 +207,6 @@ impl Capture for Tty {
     }
 
     fn type_text(&self, text: &str, delay: Duration, journal: &Journal) -> Result<()> {
-        let mut buf = [0u8; 4];
         for (i, ch) in text.chars().enumerate() {
             if !journal.live() {
                 break;
@@ -202,25 +214,13 @@ impl Capture for Tty {
             if i > 0 && !delay.is_zero() {
                 std::thread::sleep(delay);
             }
-            self.send_input(ch.encode_utf8(&mut buf).as_bytes())?;
+            self.send_input(&keys::encode_char(ch, self.keyboard()))?;
         }
         Ok(())
     }
 
     fn key(&self, combo: &str) -> Result<()> {
-        let mode = if self
-            .stream
-            .screen
-            .lock()
-            .unwrap()
-            .screen()
-            .application_cursor()
-        {
-            CursorMode::Application
-        } else {
-            CursorMode::Normal
-        };
-        let bytes = keys::encode(combo, mode)?;
+        let bytes = keys::encode(combo, self.keyboard())?;
         self.send_input(&bytes)
     }
 

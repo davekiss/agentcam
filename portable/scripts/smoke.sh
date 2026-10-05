@@ -277,4 +277,31 @@ echo "ok: query replies" >&2
 run key Return >/dev/null
 sleep 0.5
 
+# Keys follow the kitty keyboard flags the program pushed: disambiguate makes ctrl+j and Escape
+# CSI u and leaves text and Enter alone; report-all-keys makes everything CSI u.
+started=$(run start --tty --size 80x24 --out "$OUT" -- python3 "$here/key_probe.py" 1)
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+run wait --text 'probe ready' --timeout 10 >/dev/null || fail "key probe never started"
+for k in ctrl+j Escape shift+Tab ctrl+Up Return; do run key "$k" >/dev/null; sleep 0.1; done
+run type a >/dev/null
+run wait --idle 0.5 --timeout 10 >/dev/null
+seen=$(screen_lines | grep '^key ' | tr '\n' '|')
+want='key \x1b[106;5u|key \x1b[27u|key \x1b[9;2u|key \x1b[1;5A|key \r|key a|'
+[ "$seen" = "$want" ] || fail "keys under kitty flag 1 were $seen, wanted $want"
+echo "ok: keys under kitty disambiguate" >&2
+run key q >/dev/null
+sleep 0.5
+started=$(run start --tty --size 80x24 --out "$OUT" -- python3 "$here/key_probe.py" 8)
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+run wait --text 'probe ready' --timeout 10 >/dev/null || fail "key probe never started"
+run type a >/dev/null
+sleep 0.1
+run key Return >/dev/null
+run wait --idle 0.5 --timeout 10 >/dev/null
+seen=$(screen_lines | grep '^key ' | tr '\n' '|')
+want='key \x1b[97u|key \x1b[13u|'
+[ "$seen" = "$want" ] || fail "keys under kitty flag 8 were $seen, wanted $want"
+echo "ok: keys under kitty report-all-keys" >&2
+"$REC" stop >/dev/null 2>&1
+
 echo "PASS: $TAKE"
