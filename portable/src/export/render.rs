@@ -84,7 +84,12 @@ struct GlyphKey {
 pub struct Renderer<'a> {
     fonts: &'a Fonts,
     theme: &'a Theme,
-    fit: Fit,
+    /// What to draw, each panel at the same cell size.
+    panels: Vec<Fit>,
+    dividers: Vec<Rect>,
+    font_px: f32,
+    cell_w: u32,
+    cell_h: u32,
     width: u32,
     height: u32,
     baseline: i32,
@@ -94,15 +99,38 @@ pub struct Renderer<'a> {
 
 impl<'a> Renderer<'a> {
     pub fn new(fonts: &'a Fonts, theme: &'a Theme, fit: Fit, width: u32, height: u32) -> Self {
+        Renderer::panels(fonts, theme, vec![fit], Vec::new(), width, height)
+    }
+
+    /// Draws several regions of the screen, each in its own panel, with a line in the
+    /// theme's divider color across each of `dividers`.
+    pub fn panels(
+        fonts: &'a Fonts,
+        theme: &'a Theme,
+        panels: Vec<Fit>,
+        dividers: Vec<Rect>,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let first = panels[0];
+        let cell = |p: &Fit| (p.font_px, p.cell_w, p.cell_h);
+        assert!(
+            panels.iter().all(|p| cell(p) == cell(&first)),
+            "panels share one cell size"
+        );
         let line = fonts
             .regular
-            .horizontal_line_metrics(fit.font_px)
+            .horizontal_line_metrics(first.font_px)
             .expect("horizontal metrics");
-        let slack = fit.cell_h as f32 - (line.ascent - line.descent);
+        let slack = first.cell_h as f32 - (line.ascent - line.descent);
         Renderer {
             fonts,
             theme,
-            fit,
+            panels,
+            dividers,
+            font_px: first.font_px,
+            cell_w: first.cell_w,
+            cell_h: first.cell_h,
             width,
             height,
             baseline: (line.ascent + slack / 2.0).round() as i32,
@@ -117,13 +145,23 @@ impl<'a> Renderer<'a> {
     pub fn render(&mut self, screen: &vt100::Screen, buf: &mut [u8]) {
         let t = self.theme;
         fill(buf, self.width, full(self.width, self.height), t.canvas);
-        fill(buf, self.width, self.fit.panel, t.background);
+        for &d in &self.dividers {
+            fill(buf, self.width, d, t.divider);
+        }
+        for i in 0..self.panels.len() {
+            self.panel(screen, self.panels[i], buf);
+        }
+    }
 
-        let (rows, cols) = screen.size();
+    /// Draws the cells of `fit.region` and nothing outside it.
+    fn panel(&mut self, screen: &vt100::Screen, fit: Fit, buf: &mut [u8]) {
+        let t = self.theme;
+        fill(buf, self.width, fit.panel, t.background);
         let cursor = (!screen.hide_cursor()).then(|| screen.cursor_position());
-        let (cw, ch) = (self.fit.cell_w, self.fit.cell_h);
-        for row in 0..rows {
-            for col in 0..cols {
+        let (cw, ch) = (self.cell_w, self.cell_h);
+        let r = fit.region;
+        for row in r.row..r.row + r.rows {
+            for col in r.col..r.col + r.cols {
                 let Some(cell) = screen.cell(row, col) else {
                     continue;
                 };
@@ -144,8 +182,8 @@ impl<'a> Renderer<'a> {
                 }
                 let span = if cell.is_wide() { 2 } else { 1 };
                 let rect = Rect {
-                    x: self.fit.grid_x + col as u32 * cw,
-                    y: self.fit.grid_y + row as u32 * ch,
+                    x: fit.grid_x + (col - r.col) as u32 * cw,
+                    y: fit.grid_y + (row - r.row) as u32 * ch,
                     w: cw * span,
                     h: ch,
                 };
@@ -161,8 +199,8 @@ impl<'a> Renderer<'a> {
                     self.glyph(buf, key, rect, fg);
                 }
                 if cell.underline() {
-                    let y = rect.y as i32 + self.baseline + (self.fit.font_px / 8.0).ceil() as i32;
-                    let thickness = (self.fit.font_px / 14.0).ceil() as u32;
+                    let y = rect.y as i32 + self.baseline + (self.font_px / 8.0).ceil() as i32;
+                    let thickness = (self.font_px / 14.0).ceil() as u32;
                     if y >= 0 {
                         let line = Rect {
                             y: (y as u32).min(rect.y + rect.h - thickness),
@@ -219,7 +257,7 @@ impl<'a> Renderer<'a> {
             );
             return None;
         };
-        let px = self.fit.font_px;
+        let px = self.font_px;
         let (mut m, mut coverage) = r.font.rasterize_indexed(r.index, px);
         if !r.fallback {
             return Some(Glyph {
@@ -230,7 +268,7 @@ impl<'a> Renderer<'a> {
                 coverage,
             });
         }
-        let (box_w, box_h) = ((self.fit.cell_w * key.span) as i32, self.fit.cell_h as i32);
+        let (box_w, box_h) = ((self.cell_w * key.span) as i32, self.cell_h as i32);
         let shrink = (box_w as f32 / m.width as f32)
             .min(box_h as f32 / m.height as f32)
             .min(1.0);

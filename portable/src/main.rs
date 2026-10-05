@@ -103,6 +103,9 @@ struct ExportArgs {
     /// Font size in pixels. Defaults to the largest that fits.
     #[arg(long)]
     font_size: Option<f32>,
+    /// tty: show only these grid cells, COL,ROW,COLS,ROWS; repeat to stack several top to bottom.
+    #[arg(long = "region", value_name = "COL,ROW,COLS,ROWS")]
+    regions: Vec<export::layout::Region>,
     /// Draw the risograph attention border.
     #[arg(long)]
     border: bool,
@@ -524,6 +527,7 @@ fn export(args: ExportArgs) -> Result<Value> {
         layouts,
         theme,
         font_size: font_px,
+        regions,
         border,
         cursor,
         tighten,
@@ -572,6 +576,7 @@ fn export(args: ExportArgs) -> Result<Value> {
             layouts,
             theme,
             font_px,
+            regions,
             border,
             cursor,
             pacing,

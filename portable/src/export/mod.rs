@@ -24,6 +24,8 @@ pub struct ExportOptions {
     pub layouts: Vec<layout::Preset>,
     pub theme: &'static theme::Theme,
     pub font_px: Option<f32>,
+    /// `--region`: the grid rectangles to stack top to bottom instead of showing the whole grid.
+    pub regions: Vec<layout::Region>,
     pub border: bool,
     pub cursor: pointer::CursorMode,
     pub pacing: Pacing,
@@ -42,14 +44,25 @@ pub enum Pacing {
 #[derive(Debug, Serialize)]
 pub struct Export {
     pub layout: &'static str,
-    /// `fit` shows the whole source; `follow` crops to a window that pans with the action.
+    /// `fit` shows the whole source; `follow` crops to a window that pans with the action;
+    /// `stack` shows the `--region`s top to bottom.
     pub viewport: &'static str,
+    /// With `stack`: each region and the panel it draws in, in canvas pixels.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<StackedRegion>,
     pub path: PathBuf,
     pub width: u32,
     pub height: u32,
     pub duration: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tightened: Option<tighten::Tightened>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StackedRegion {
+    #[serde(flatten)]
+    pub region: layout::Region,
+    pub panel: layout::Rect,
 }
 
 /// A finished tty take's terminal stream.
@@ -187,17 +200,35 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
     let mut out = Vec::new();
     for preset in &opts.layouts {
         let path = dir.join(format!("export-{}.mp4", preset.slug));
-        let (frames, kind) = match &loaded.recording {
+        let (frames, kind, regions) = match &loaded.recording {
             Recording::Tty(tty) => {
                 let frames = ((map.duration() * FPS as f64).round() as u64).max(1);
-                let viewport =
-                    layout::viewport(preset, tty.size, fonts.cell_metrics(), opts.font_px)?;
+                let viewport = layout::viewport(
+                    preset,
+                    tty.size,
+                    &opts.regions,
+                    fonts.cell_metrics(),
+                    opts.font_px,
+                )?;
                 eprintln!(
                     "rec: exporting {} ({frames} frames, {}px font, {} viewport)",
                     path.display(),
                     viewport.font_px(),
                     viewport.kind()
                 );
+                let kind = viewport.kind();
+                let ring = opts.border.then(|| viewport.panel());
+                let regions = match &viewport {
+                    layout::Viewport::Stack(s) => s
+                        .panels
+                        .iter()
+                        .map(|p| StackedRegion {
+                            region: p.region,
+                            panel: p.panel,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 let mut source = TtyFrames {
                     cast: &tty.cast,
                     map: &map,
@@ -205,9 +236,11 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                     view: view::View::new(&fonts, opts.theme, viewport, preset),
                     next: 0,
                 };
-                let ring = opts.border.then(|| viewport.panel());
                 encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
-                (frames, viewport.kind())
+                (frames, kind, regions)
+            }
+            Recording::Screen(_) if !opts.regions.is_empty() => {
+                return Err(crate::recorder::not_supported("--region", "x11"));
             }
             Recording::Screen(take) => {
                 let frames = take.frames(duration);
@@ -228,12 +261,13 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                 )?;
                 let ring = opts.border.then(|| viewport.panel());
                 encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
-                (frames, viewport.kind())
+                (frames, viewport.kind(), Vec::new())
             }
         };
         out.push(Export {
             layout: preset.aspect,
             viewport: kind,
+            regions,
             path,
             width: preset.width,
             height: preset.height,

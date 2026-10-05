@@ -35,6 +35,14 @@ impl<'a> View<'a> {
                 preset.width,
                 preset.height,
             )),
+            Viewport::Stack(s) => View::Fit(Renderer::panels(
+                fonts,
+                theme,
+                s.panels,
+                s.dividers,
+                preset.width,
+                preset.height,
+            )),
             Viewport::Follow(f) => {
                 let s = f.surface;
                 let renderer = Renderer::new(fonts, theme, s, s.panel.w, s.panel.h);

@@ -7,6 +7,8 @@ pub struct Theme {
     pub background: Rgb,
     pub foreground: Rgb,
     pub cursor: Rgb,
+    /// The line between stacked panels.
+    pub divider: Rgb,
     pub ansi: [Rgb; 16],
 }
 
@@ -21,6 +23,7 @@ pub const THEMES: &[Theme] = &[
         background: hex(0x17191f),
         foreground: hex(0xd9dee8),
         cursor: hex(0xe8e8e8),
+        divider: hex(0x2b2f3a),
         ansi: [
             hex(0x2b2f3a),
             hex(0xff6b7f),
@@ -46,6 +49,7 @@ pub const THEMES: &[Theme] = &[
         background: hex(0xfafafa),
         foreground: hex(0x383a42),
         cursor: hex(0x526fff),
+        divider: hex(0xc4c7ce),
         ansi: [
             hex(0x383a42),
             hex(0xd73a49),
