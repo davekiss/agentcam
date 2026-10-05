@@ -179,6 +179,22 @@ python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["segments"][1]["t
 mismatched=$("$REC" export "$TAKE" --layout 16:9 --plan "$OUT/plan.json" 2>/dev/null) && fail "a plan for another take rendered"
 check "a plan for another take is bad_args" 'j["error"]["code"] == "bad_args"' "$mismatched"
 
+stacked=$(run export "$TAKE" --layout 9:16 --region 50,0,50,30 --region 0,20,50,10 --tighten)
+check "--region exports a 1080x1920 stack" \
+  '[(e["layout"], e["viewport"], e["width"], e["height"]) for e in j["exports"]] == [("9:16", "stack", 1080, 1920)]' "$stacked"
+check "--region reports each region in order with its panel" \
+  '[(r["col"], r["row"], r["cols"], r["rows"]) for r in j["exports"][0]["regions"]] == [(50, 0, 50, 30), (0, 20, 50, 10)]' "$stacked"
+check "stacked panels sit top to bottom inside the frame, same width for the same columns" \
+  '(lambda a, b: a["y"] + a["h"] < b["y"] and b["y"] + b["h"] <= 1920 - 40 and a["w"] == b["w"] and a["y"] >= 40)(*[r["panel"] for r in j["exports"][0]["regions"]])' "$stacked"
+check "--region keeps the --tighten time map" \
+  'j["exports"][0]["tightened"] == '"$(printf '%s' "$tight" | json 'j["exports"][0]["tightened"]')" "$stacked"
+probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of json "$TAKE/export-9x16.mp4")
+check "stacked export is 1080x1920" 'j["streams"][0] == {"width": 1080, "height": 1920}' "$probe"
+outside=$("$REC" export "$TAKE" --layout 9:16 --region 60,0,41,30 2>/dev/null) && fail "a region past the grid exported"
+check "a region past the grid is bad_args" 'j["error"]["code"] == "bad_args"' "$outside"
+empty=$("$REC" export "$TAKE" --layout 9:16 --region 0,0,0,30 2>/dev/null) && fail "an empty region exported"
+check "an empty region is bad_args" 'j["error"]["code"] == "bad_args"' "$empty"
+
 both=$("$REC" start --tty --for 9:16 --size 80x24 -- true 2>/dev/null) && fail "--for with --size succeeded"
 check "--for with --size is bad_args" 'j["error"]["code"] == "bad_args"' "$both"
 
