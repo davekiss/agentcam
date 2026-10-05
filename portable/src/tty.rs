@@ -15,7 +15,16 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How long a drag holds the button still before moving, as a hand does. Claude Code 2.1 keeps
+/// only the newest of the input events that reach a plugin's surface within a frame, so motion
+/// 15 ms after the press replaced it and the drag extended the old selection.
+const PRESS_HOLD: Duration = Duration::from_millis(100);
+
+/// The least time between the input of one command and the next, the default typing delay, so
+/// `rec type` then `rec key Return` does not land both in one frame of the program.
+const INPUT_GAP: Duration = Duration::from_millis(40);
 
 /// What the reader thread writes: the emulated screen and the plain-text output.
 struct Stream {
@@ -29,6 +38,7 @@ struct Tty {
     /// Output cursor taken just before the last input byte reached the PTY, so whatever the
     /// program writes in response lands after it.
     input_mark: AtomicU64,
+    last_input: Mutex<Option<Instant>>,
     /// Shared with the reader thread, which writes the terminal's replies to queries.
     pty_in: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
@@ -135,6 +145,7 @@ pub fn start(dir: &Path, command: &[String], size: Size, tx: Sender<Msg>) -> Res
         capture: Box::new(Tty {
             stream,
             input_mark: AtomicU64::new(0),
+            last_input: Mutex::new(None),
             pty_in,
             child: Mutex::new(child),
             reader_done: Mutex::new(done_rx),
@@ -160,9 +171,20 @@ impl Tty {
             let cursor = self.stream.output.lock().unwrap().cursor();
             self.input_mark.store(cursor, Ordering::Relaxed);
         }
+        *self.last_input.lock().unwrap() = Some(Instant::now());
         w.write_all(bytes)
             .and_then(|_| w.flush())
             .map_err(|e| RecError::io("write to pty", e))
+    }
+
+    /// Waits until `INPUT_GAP` has passed since the last input, at the start of each command.
+    fn pace(&self) {
+        let last = *self.last_input.lock().unwrap();
+        if let Some(wait) =
+            last.and_then(|t| (t + INPUT_GAP).checked_duration_since(Instant::now()))
+        {
+            std::thread::sleep(wait);
+        }
     }
 
     fn keyboard(&self) -> Keyboard {
@@ -188,7 +210,12 @@ impl Tty {
     }
 
     /// Sends the reports `mouse` gives each action, skipping what the mode leaves out.
-    fn send_mouse(&self, mouse: Protocol, actions: &[(Action, (u32, u32))], mark: bool) -> Result<()> {
+    fn send_mouse(
+        &self,
+        mouse: Protocol,
+        actions: &[(Action, (u32, u32))],
+        mark: bool,
+    ) -> Result<()> {
         let mut bytes = Vec::new();
         for &(action, cell) in actions {
             let cell = (cell.0 as u16, cell.1 as u16);
@@ -207,6 +234,7 @@ impl Capture for Tty {
     }
 
     fn type_text(&self, text: &str, delay: Duration, journal: &Journal) -> Result<()> {
+        self.pace();
         for (i, ch) in text.chars().enumerate() {
             if !journal.live() {
                 break;
@@ -220,6 +248,7 @@ impl Capture for Tty {
     }
 
     fn key(&self, combo: &str) -> Result<()> {
+        self.pace();
         let bytes = keys::encode(combo, self.keyboard())?;
         self.send_input(&bytes)
     }
@@ -230,9 +259,13 @@ impl Capture for Tty {
             return Err(mouse_off());
         }
         let cell = (x, y);
+        self.pace();
         self.send_mouse(
             mouse,
-            &[(Action::Press(button), cell), (Action::Release(button), cell)],
+            &[
+                (Action::Press(button), cell),
+                (Action::Release(button), cell),
+            ],
             true,
         )
     }
@@ -240,6 +273,7 @@ impl Capture for Tty {
     /// A motion report when the program asked for motion without a button held, and
     /// otherwise nothing, so a script that moves before clicking runs anywhere.
     fn move_to(&self, x: u32, y: u32) -> Result<()> {
+        self.pace();
         self.send_mouse(self.mouse(), &[(Action::Move, (x, y))], true)
     }
 
@@ -249,9 +283,13 @@ impl Capture for Tty {
             return Err(mouse_off());
         }
         let (&first, rest) = path.split_first().expect("a drag has a start");
+        self.pace();
         self.send_mouse(mouse, &[(Action::Press(button), first)], true)?;
-        for &cell in rest {
-            std::thread::sleep(step);
+        std::thread::sleep(PRESS_HOLD);
+        for (i, &cell) in rest.iter().enumerate() {
+            if i > 0 {
+                std::thread::sleep(step);
+            }
             self.send_mouse(mouse, &[(Action::Drag(button), cell)], false)?;
         }
         std::thread::sleep(step);
