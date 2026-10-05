@@ -215,4 +215,54 @@ check "--for 9:16 export is 1080x1920" 'j["streams"][0] == {"width": 1080, "heig
 ffmpeg -v error -y -sseof -0.2 -i "$mp4" -frames:v 1 "$TAKE/frame-9x16.png" || fail "frame extract for --for 9:16"
 fills_9x16 "$TAKE/frame-9x16.png" "--for 9:16 take"
 
+screen_lines() { printf '%s' "$(run screen)" | json 'j["text"]'; }
+
+started=$(run start --tty --size 100x30 --out "$OUT" -- bash --norc)
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+off=$("$REC" click 1 1 2>/dev/null) && fail "a click reached a shell with mouse reporting off"
+check "click on a program without mouse reporting is mouse_off" 'j["error"]["code"] == "mouse_off"' "$off"
+off=$("$REC" drag 1 1 5 1 2>/dev/null) && fail "a drag reached a shell with mouse reporting off"
+check "drag on a program without mouse reporting is mouse_off" 'j["error"]["code"] == "mouse_off"' "$off"
+run move 3 3 >/dev/null
+outside=$("$REC" click 100 0 2>/dev/null) && fail "a click outside the grid succeeded"
+check "a click outside the grid is bad_args" 'j["error"]["code"] == "bad_args"' "$outside"
+run stop >/dev/null
+
+# curses picks the mode and encoding from terminfo, so either a click or a press and release counts.
+started=$(run start --tty --size 80x24 --out "$OUT" -- python3 "$here/mouse_probe.py")
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+run wait --text 'probe ready' --timeout 10 >/dev/null || fail "curses probe never started"
+run click 0 5 >/dev/null
+run click 79 23 --button right >/dev/null
+run drag 10 10 20 12 >/dev/null
+run wait --idle 0.5 --timeout 10 >/dev/null
+seen=$(screen_lines)
+echo "$seen" >&2
+grep -Eq '^ev 0 5 (click1|press1)' <<<"$seen" || fail "curses missed the left click at 0,5"
+grep -Eq '^ev 79 23 (click3|press3)' <<<"$seen" || fail "curses missed the right click at 79,23"
+grep -q '^ev 10 10 press1' <<<"$seen" || fail "curses missed the drag's press at 10,10"
+grep -q '^ev 20 12 release1' <<<"$seen" || fail "curses missed the drag's release at 20,12"
+echo "ok: curses saw clicks and a drag at the cells sent" >&2
+run key q >/dev/null
+sleep 0.5
+timeline=$(cat "$TAKE/timeline.json")
+check "timeline has the click at its cell center" \
+  'any(e["type"] == "click" and (e["x"], e["y"], e["button"]) == (0.00625, 0.229167, "left") for e in j["events"])' "$timeline"
+check "timeline has the drag" \
+  'any(e["type"] == "drag" and (e["x1"], e["y1"], e["x2"], e["y2"]) == (0.13125, 0.4375, 0.25625, 0.520833) for e in j["events"])' "$timeline"
+
+started=$(run start --tty --size 80x24 --out "$OUT" -- python3 "$here/mouse_probe.py" sgr-any)
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+run wait --text 'probe ready' --timeout 10 >/dev/null || fail "sgr probe never started"
+run move 5 5 >/dev/null
+run click 79 23 --button middle >/dev/null
+run drag 0 0 6 2 --steps 3 >/dev/null
+run wait --idle 0.5 --timeout 10 >/dev/null
+seen=$(screen_lines | grep '^sgr ' | tr '\n' '|')
+want='sgr 35 5 5 M|sgr 1 79 23 M|sgr 1 79 23 m|sgr 0 0 0 M|sgr 32 2 1 M|sgr 32 4 1 M|sgr 32 6 2 M|sgr 0 6 2 m|'
+[ "$seen" = "$want" ] || fail "any-motion SGR reports were $seen, wanted $want"
+echo "ok: any-motion SGR reports for move, click, and drag" >&2
+run key q >/dev/null
+sleep 0.5
+
 echo "PASS: $TAKE"
