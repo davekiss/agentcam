@@ -164,6 +164,7 @@ if let asyncCommand = command as? AsyncCommand {
     do {
         try command.run()
     } catch {
+        if Rec.exitCode(for: error) == .success { Rec.exit(withError: error) }
         Output.fail(error)
     }
 }
