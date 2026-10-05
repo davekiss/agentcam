@@ -151,6 +151,11 @@ impl Button {
             Button::Right => 3,
         }
     }
+
+    /// The button number in an xterm mouse report.
+    pub fn xterm(self) -> u8 {
+        self.x11() - 1
+    }
 }
 
 impl std::str::FromStr for Button {
@@ -227,6 +232,14 @@ pub enum Event {
         y: f64,
         button: Button,
     },
+    /// Press at (x1, y1), move in a straight line, release at (x2, y2).
+    Drag {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        button: Button,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -268,6 +281,11 @@ pub struct Active {
     pub source: Source,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
+}
+
+/// A tty cell's center as a 0..1 fraction of the grid.
+pub fn cell_center(cell: u32, cells: u16) -> f64 {
+    round_t((cell as f64 + 0.5) / cells as f64)
 }
 
 /// A pixel position as a 0..1 fraction of `extent`, rounded to six places.
@@ -366,6 +384,14 @@ mod tests {
         assert_eq!(normalize(0.0, 1920), 0.0);
         assert_eq!(normalize(960.0, 1920), 0.5);
         assert_eq!(normalize(1080.0, 1080), 1.0);
+    }
+
+    #[test]
+    fn tty_cells_normalize_to_their_centers() {
+        assert_eq!(cell_center(0, 120), 0.004167);
+        assert_eq!(cell_center(59, 120), 0.495833);
+        assert_eq!(cell_center(119, 120), 0.995833);
+        assert_eq!(cell_center(1, 2), 0.75);
     }
 
     #[test]

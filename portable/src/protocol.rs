@@ -19,7 +19,7 @@ pub enum Request {
     Key {
         combo: String,
     },
-    /// x11: pixel coordinates on the screen.
+    /// Pixels of an x11 screen, or 0-based cells of a tty grid.
     Click {
         x: u32,
         y: u32,
@@ -28,6 +28,14 @@ pub enum Request {
     Move {
         x: u32,
         y: u32,
+    },
+    Drag {
+        x1: u32,
+        y1: u32,
+        x2: u32,
+        y2: u32,
+        button: Button,
+        steps: u32,
     },
     /// tty: the emulated screen as text.
     Screen,

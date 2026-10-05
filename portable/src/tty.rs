@@ -3,7 +3,8 @@
 use crate::cast::{CastWriter, Header, Utf8Buffer};
 use crate::error::{RecError, Result};
 use crate::keys::{self, CursorMode};
-use crate::model::{self, Size, Track};
+use crate::model::{self, Button, Size, Track};
+use crate::mouse::{mouse_off, Action, Protocol};
 use crate::output::OutputLog;
 use crate::protocol::{Cursor, ScreenText};
 use crate::recorder::{Capture, FinishReason, Journal, Msg, Started};
@@ -130,12 +131,42 @@ pub fn start(dir: &Path, command: &[String], size: Size, tx: Sender<Msg>) -> Res
 
 impl Tty {
     fn send_input(&self, bytes: &[u8]) -> Result<()> {
+        self.write_input(bytes, true)
+    }
+
+    /// `mark: false` continues the input before it, such as the rest of a drag, so `wait --new`
+    /// still covers what the program wrote since that input started.
+    fn write_input(&self, bytes: &[u8], mark: bool) -> Result<()> {
         let mut w = self.pty_in.lock().unwrap();
-        let mark = self.stream.output.lock().unwrap().cursor();
-        self.input_mark.store(mark, Ordering::Relaxed);
+        if mark {
+            let cursor = self.stream.output.lock().unwrap().cursor();
+            self.input_mark.store(cursor, Ordering::Relaxed);
+        }
         w.write_all(bytes)
             .and_then(|_| w.flush())
             .map_err(|e| RecError::io("write to pty", e))
+    }
+
+    fn mouse(&self) -> Protocol {
+        let parser = self.stream.screen.lock().unwrap();
+        let screen = parser.screen();
+        Protocol {
+            mode: screen.mouse_protocol_mode(),
+            encoding: screen.mouse_protocol_encoding(),
+        }
+    }
+
+    /// Sends the reports `mouse` gives each action, skipping what the mode leaves out.
+    fn send_mouse(&self, mouse: Protocol, actions: &[(Action, (u32, u32))], mark: bool) -> Result<()> {
+        let mut bytes = Vec::new();
+        for &(action, cell) in actions {
+            let cell = (cell.0 as u16, cell.1 as u16);
+            bytes.extend(mouse.report(action, cell)?.unwrap_or_default());
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.write_input(&bytes, mark)
     }
 }
 
@@ -173,6 +204,41 @@ impl Capture for Tty {
         };
         let bytes = keys::encode(combo, mode)?;
         self.send_input(&bytes)
+    }
+
+    fn click(&self, x: u32, y: u32, button: Button) -> Result<()> {
+        let mouse = self.mouse();
+        if !mouse.on() {
+            return Err(mouse_off());
+        }
+        let cell = (x, y);
+        self.send_mouse(
+            mouse,
+            &[(Action::Press(button), cell), (Action::Release(button), cell)],
+            true,
+        )
+    }
+
+    /// A motion report when the program asked for motion without a button held, and
+    /// otherwise nothing, so a script that moves before clicking runs anywhere.
+    fn move_to(&self, x: u32, y: u32) -> Result<()> {
+        self.send_mouse(self.mouse(), &[(Action::Move, (x, y))], true)
+    }
+
+    fn drag(&self, path: &[(u32, u32)], button: Button, step: Duration) -> Result<()> {
+        let mouse = self.mouse();
+        if !mouse.on() {
+            return Err(mouse_off());
+        }
+        let (&first, rest) = path.split_first().expect("a drag has a start");
+        self.send_mouse(mouse, &[(Action::Press(button), first)], true)?;
+        for &cell in rest {
+            std::thread::sleep(step);
+            self.send_mouse(mouse, &[(Action::Drag(button), cell)], false)?;
+        }
+        std::thread::sleep(step);
+        let last = *path.last().expect("a drag has an end");
+        self.send_mouse(mouse, &[(Action::Release(button), last)], false)
     }
 
     /// Bytes of output so far: it moves exactly when the program writes.

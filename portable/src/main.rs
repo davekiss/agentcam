@@ -3,6 +3,7 @@ mod error;
 mod export;
 mod keys;
 mod model;
+mod mouse;
 mod output;
 mod paths;
 mod protocol;
@@ -51,7 +52,7 @@ enum Cmd {
     },
     /// Send a key or chord, such as Return, ctrl+c, alt+x, or shift+Tab (x11).
     Key { combo: String },
-    /// Click at a pixel of the x11 screen.
+    /// Click at a pixel of the x11 screen, or a 0-based cell (col row) of the tty grid.
     Click {
         x: u32,
         y: u32,
@@ -59,8 +60,21 @@ enum Cmd {
         #[arg(long, default_value = "left")]
         button: Button,
     },
-    /// Move the pointer to a pixel of the x11 screen.
+    /// Move the pointer to a pixel of the x11 screen, or a cell of the tty grid.
     Move { x: u32, y: u32 },
+    /// Press at (x1, y1), move in a straight line, and release at (x2, y2).
+    Drag {
+        x1: u32,
+        y1: u32,
+        x2: u32,
+        y2: u32,
+        /// left, middle, or right.
+        #[arg(long, default_value = "left")]
+        button: Button,
+        /// How many moves between the press and the release.
+        #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        steps: u32,
+    },
     /// Print the emulated tty screen, or write a PNG of the x11 screen.
     Screen {
         /// x11: where to write the PNG. Defaults to <take>/screen-<t>.png.
@@ -241,6 +255,21 @@ fn run(cmd: Cmd) -> Result<Value> {
         }
         Cmd::Click { x, y, button } => sent(call(&Request::Click { x, y, button })?),
         Cmd::Move { x, y } => sent(call(&Request::Move { x, y })?),
+        Cmd::Drag {
+            x1,
+            y1,
+            x2,
+            y2,
+            button,
+            steps,
+        } => sent(call(&Request::Drag {
+            x1,
+            y1,
+            x2,
+            y2,
+            button,
+            steps,
+        })?),
         Cmd::Screen { png } => screen(png),
         Cmd::Wait {
             text,

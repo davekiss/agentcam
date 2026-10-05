@@ -90,7 +90,11 @@ impl Pointer {
         for e in events {
             let (x, y) = match e.event {
                 Event::Cursor { x, y } => (x, y),
-                Event::Click { x, y, .. } => {
+                // A drag ripples at its press; the cursor samples carry the motion after it.
+                Event::Click { x, y, .. }
+                | Event::Drag {
+                    x1: x, y1: y, ..
+                } => {
                     clicks.push(Sample { t: e.t, x, y });
                     (x, y)
                 }
@@ -382,6 +386,33 @@ mod tests {
                 button: Button::Left,
             },
         }
+    }
+
+    #[test]
+    fn a_drag_ripples_at_its_press_and_follows_the_samples_after() {
+        let p = Pointer::new(&[
+            cursor(0.0, 0.5, 0.5),
+            TimedEvent {
+                t: 4.0,
+                event: Event::Drag {
+                    x1: 0.1,
+                    y1: 0.2,
+                    x2: 0.9,
+                    y2: 0.2,
+                    button: Button::Left,
+                },
+            },
+            cursor(4.03, 0.5, 0.2),
+            cursor(4.1, 0.9, 0.2),
+        ]);
+        let at_press = p.look(4.0, CursorMode::Auto).unwrap();
+        assert_eq!((at_press.x, at_press.y), (0.1, 0.2));
+        assert_eq!(at_press.opacity, 1.0);
+        let ripple = at_press.ripple.expect("a ripple at the press");
+        assert_eq!((ripple.x, ripple.y, ripple.progress), (0.1, 0.2, 0.0));
+        let after = p.look(4.2, CursorMode::Auto).unwrap();
+        assert_eq!((after.x, after.y), (0.9, 0.2));
+        assert!(p.look(3.0, CursorMode::Auto).is_none(), "idle before the lead-in");
     }
 
     /// Idle at the middle from t0, a move at 5s, a click at 10s, idle after.

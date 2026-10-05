@@ -59,7 +59,9 @@ impl ScreenTake {
         let pointer = events
             .iter()
             .filter_map(|e| match e.event {
-                Event::Cursor { x, .. } | Event::Click { x, .. } => Some((e.t, x)),
+                Event::Cursor { x, .. } | Event::Click { x, .. } | Event::Drag { x1: x, .. } => {
+                    Some((e.t, x))
+                }
                 _ => None,
             })
             .collect();

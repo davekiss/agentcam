@@ -4,7 +4,7 @@
 
 use crate::error::{RecError, Result};
 use crate::model::{
-    self, normalize, round_t, Active, Button, Event, Marker, Source, Take, TakeStatus,
+    self, cell_center, normalize, round_t, Active, Button, Event, Marker, Source, Take, TakeStatus,
     TimedEvent, Timeline, Track,
 };
 use crate::paths;
@@ -93,6 +93,12 @@ pub trait Capture: Send + Sync {
 
     fn move_to(&self, _x: u32, _y: u32) -> Result<()> {
         Err(not_supported("move", self.kind()))
+    }
+
+    /// Presses at the first point of `path`, moves through the rest `step` apart, and
+    /// releases at the last.
+    fn drag(&self, _path: &[(u32, u32)], _button: Button, _step: Duration) -> Result<()> {
+        Err(not_supported("drag", self.kind()))
     }
 
     fn screen_text(&self) -> Result<ScreenText> {
@@ -352,21 +358,44 @@ fn handle_connection(stream: UnixStream, shared: &Shared) {
     let _ = protocol::write_message(&stream, &resp);
 }
 
-/// A pixel position on an x11 take's screen, checked against the frame.
-fn on_screen(source: &Source, x: u32, y: u32) -> Result<(f64, f64)> {
-    let Source::X11 { frame, .. } = source else {
-        return Err(not_supported("click and move", "tty"));
+/// A pixel of an x11 screen or a cell of a tty grid, checked against it and normalized.
+fn position(source: &Source, x: u32, y: u32) -> Result<(f64, f64)> {
+    let (w, h, what) = match source {
+        Source::X11 { frame, .. } => (frame.width, frame.height, "screen"),
+        Source::Tty { size, .. } => (size.cols as u32, size.rows as u32, "grid"),
     };
-    if x >= frame.width || y >= frame.height {
+    if x >= w || y >= h {
         return Err(RecError::new(
             "bad_args",
-            format!(
-                "({x}, {y}) is outside the {}x{} screen",
-                frame.width, frame.height
-            ),
+            format!("({x}, {y}) is outside the {w}x{h} {what}"),
         ));
     }
-    Ok((normalize(x as f64, frame.width), normalize(y as f64, frame.height)))
+    Ok(match source {
+        Source::X11 { frame, .. } => (
+            normalize(x as f64, frame.width),
+            normalize(y as f64, frame.height),
+        ),
+        Source::Tty { size, .. } => (cell_center(x, size.cols), cell_center(y, size.rows)),
+    })
+}
+
+/// How long a drag waits between points: slow enough for a 30 Hz pointer sampler and a
+/// program's event loop to see each one.
+const DRAG_STEP: Duration = Duration::from_millis(15);
+
+/// `steps` evenly spaced points from `from` to `to`, both included, without repeats.
+fn line(from: (u32, u32), to: (u32, u32), steps: u32) -> Vec<(u32, u32)> {
+    let lerp = |a: u32, b: u32, i: u32| {
+        (a as f64 + (b as f64 - a as f64) * i as f64 / steps as f64).round() as u32
+    };
+    let mut path: Vec<(u32, u32)> = Vec::new();
+    for i in 0..=steps {
+        let p = (lerp(from.0, to.0, i), lerp(from.1, to.1, i));
+        if path.last() != Some(&p) {
+            path.push(p);
+        }
+    }
+    path
 }
 
 fn serve(req: Request, shared: &Shared) -> Result<Response> {
@@ -402,7 +431,7 @@ fn serve(req: Request, shared: &Shared) -> Result<Response> {
             Ok(Response::Sent { t })
         }
         Request::Click { x, y, button } => {
-            let (nx, ny) = on_screen(&shared.source, x, y)?;
+            let (nx, ny) = position(&shared.source, x, y)?;
             let t = journal.now();
             capture.click(x, y, button)?;
             journal.log(
@@ -416,9 +445,37 @@ fn serve(req: Request, shared: &Shared) -> Result<Response> {
             Ok(Response::Sent { t })
         }
         Request::Move { x, y } => {
-            on_screen(&shared.source, x, y)?;
+            let (nx, ny) = position(&shared.source, x, y)?;
             let t = journal.now();
             capture.move_to(x, y)?;
+            // x11 samples the pointer itself; a tty has no pointer to sample.
+            if let Source::Tty { .. } = shared.source {
+                journal.log(t, Event::Cursor { x: nx, y: ny });
+            }
+            Ok(Response::Sent { t })
+        }
+        Request::Drag {
+            x1,
+            y1,
+            x2,
+            y2,
+            button,
+            steps,
+        } => {
+            let (nx1, ny1) = position(&shared.source, x1, y1)?;
+            let (nx2, ny2) = position(&shared.source, x2, y2)?;
+            let t = journal.now();
+            capture.drag(&line((x1, y1), (x2, y2), steps.max(1)), button, DRAG_STEP)?;
+            journal.log(
+                t,
+                Event::Drag {
+                    x1: nx1,
+                    y1: ny1,
+                    x2: nx2,
+                    y2: ny2,
+                    button,
+                },
+            );
             Ok(Response::Sent { t })
         }
         Request::Screen => Ok(Response::Screen {
@@ -463,5 +520,37 @@ fn serve(req: Request, shared: &Shared) -> Result<Response> {
             })
         }
         Request::Stop => unreachable!("handled before dispatch"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Frame, Size};
+
+    #[test]
+    fn a_line_runs_end_to_end_without_repeating_a_point() {
+        assert_eq!(line((0, 0), (8, 4), 4), vec![(0, 0), (2, 1), (4, 2), (6, 3), (8, 4)]);
+        assert_eq!(line((3, 1), (5, 1), 8), vec![(3, 1), (4, 1), (5, 1)]);
+        assert_eq!(line((7, 7), (7, 7), 8), vec![(7, 7)]);
+        assert_eq!(line((10, 0), (0, 0), 2), vec![(10, 0), (5, 0), (0, 0)]);
+    }
+
+    #[test]
+    fn positions_are_checked_against_the_source_and_normalized() {
+        let tty = Source::Tty {
+            command: vec![],
+            size: Size { cols: 80, rows: 24 },
+        };
+        assert_eq!(position(&tty, 0, 0).unwrap(), (0.00625, 0.020833));
+        assert_eq!(position(&tty, 79, 23).unwrap(), (0.99375, 0.979167));
+        assert_eq!(position(&tty, 80, 0).unwrap_err().code, "bad_args");
+        assert_eq!(position(&tty, 0, 24).unwrap_err().code, "bad_args");
+        let x11 = Source::X11 {
+            command: vec![],
+            frame: Frame { x: 0, y: 0, width: 1920, height: 1080 },
+        };
+        assert_eq!(position(&x11, 960, 0).unwrap(), (0.5, 0.0));
+        assert_eq!(position(&x11, 1920, 0).unwrap_err().code, "bad_args");
     }
 }

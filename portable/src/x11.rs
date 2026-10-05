@@ -482,6 +482,10 @@ impl Capture for X11 {
         self.screen.move_to(x, y)
     }
 
+    fn drag(&self, path: &[(u32, u32)], button: Button, step: Duration) -> Result<()> {
+        self.screen.drag(path, button, step)
+    }
+
     fn snapshot(&self, png: &Path) -> Result<(u32, u32)> {
         let image = self.screen.image()?;
         write_png(png, &image, self.screen.frame)?;
@@ -800,6 +804,20 @@ impl Screen {
     fn click(&self, x: u32, y: u32, button: Button) -> Result<()> {
         self.fake(MOTION_NOTIFY, 0, x as i16, y as i16)?;
         self.fake(BUTTON_PRESS, button.x11(), 0, 0)?;
+        self.fake(BUTTON_RELEASE, button.x11(), 0, 0)?;
+        self.sync()
+    }
+
+    fn drag(&self, path: &[(u32, u32)], button: Button, step: Duration) -> Result<()> {
+        let (&(x, y), rest) = path.split_first().expect("a drag has a start");
+        self.fake(MOTION_NOTIFY, 0, x as i16, y as i16)?;
+        self.fake(BUTTON_PRESS, button.x11(), 0, 0)?;
+        self.sync()?;
+        for &(x, y) in rest {
+            std::thread::sleep(step);
+            self.move_to(x, y)?;
+        }
+        std::thread::sleep(step);
         self.fake(BUTTON_RELEASE, button.x11(), 0, 0)?;
         self.sync()
     }

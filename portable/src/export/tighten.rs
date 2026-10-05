@@ -5,7 +5,7 @@
 
 use super::FPS;
 use crate::error::{RecError, Result};
-use crate::model::{Event, Size, TimedEvent};
+use crate::model::{Button, Event, Size, TimedEvent};
 use serde::{Deserialize, Serialize};
 
 /// Something that happened on the take clock.
@@ -140,6 +140,20 @@ const BURST_GAP: f64 = 0.5;
 const ECHO: f64 = 0.5;
 const ECHO_PER_CHAR: f64 = 0.1;
 
+/// The `col row` a normalized cell center came from, as `rec click` takes it.
+fn cell(size: Size, x: f64, y: f64) -> String {
+    let at = |v: f64, n: u16| ((v * n as f64) as u16).min(n - 1);
+    format!("{} {}", at(x, size.cols), at(y, size.rows))
+}
+
+fn button_flag(button: Button) -> &'static str {
+    match button {
+        Button::Left => "",
+        Button::Middle => " --button middle",
+        Button::Right => " --button right",
+    }
+}
+
 /// Replays the cast and lists every input and every frame whose screen differs from the last.
 pub fn analyze(
     output: &[(f64, String)],
@@ -164,7 +178,28 @@ pub fn analyze(
                 typed: String::new(),
                 label: format!("key {key}"),
             }),
-            Event::Marker { .. } | Event::Cursor { .. } | Event::Click { .. } => None,
+            Event::Click { x, y, button } => Some(Point::Input {
+                t: e.t,
+                typed: String::new(),
+                label: format!("click {}{}", cell(size, *x, *y), button_flag(*button)),
+            }),
+            Event::Drag {
+                x1,
+                y1,
+                x2,
+                y2,
+                button,
+            } => Some(Point::Input {
+                t: e.t,
+                typed: String::new(),
+                label: format!(
+                    "drag {} {}{}",
+                    cell(size, *x1, *y1),
+                    cell(size, *x2, *y2),
+                    button_flag(*button)
+                ),
+            }),
+            Event::Marker { .. } | Event::Cursor { .. } => None,
         })
         .collect();
 
@@ -716,6 +751,36 @@ mod tests {
         let segs = segment(points, duration);
         let (map, report) = plan(&segs, &POLICY, duration);
         (segs, map, report)
+    }
+
+    #[test]
+    fn tty_clicks_and_drags_are_inputs_labelled_like_the_commands() {
+        use crate::model::{cell_center, Button};
+        let size = Size { cols: 80, rows: 24 };
+        let at = |c: u32, r: u32| (cell_center(c, size.cols), cell_center(r, size.rows));
+        let ((x, y), (x2, y2)) = (at(79, 0), at(3, 23));
+        let events = [
+            TimedEvent {
+                t: 1.0,
+                event: Event::Click { x, y, button: Button::Left },
+            },
+            TimedEvent {
+                t: 2.0,
+                event: Event::Drag { x1: x, y1: y, x2, y2, button: Button::Right },
+            },
+            TimedEvent {
+                t: 3.0,
+                event: Event::Cursor { x, y },
+            },
+        ];
+        let labels: Vec<String> = analyze(&[], &events, size, 5.0)
+            .into_iter()
+            .filter_map(|p| match p {
+                Point::Input { label, .. } => Some(label),
+                Point::Change { .. } => None,
+            })
+            .collect();
+        assert_eq!(labels, ["click 79 0", "drag 79 0 3 23 --button right"]);
     }
 
     #[test]
