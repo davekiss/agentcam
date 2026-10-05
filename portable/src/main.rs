@@ -8,6 +8,7 @@ mod output;
 mod paths;
 mod protocol;
 mod recorder;
+mod terminal;
 mod tty;
 mod upload;
 mod x11;

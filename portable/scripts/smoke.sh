@@ -265,4 +265,16 @@ echo "ok: any-motion SGR reports for move, click, and drag" >&2
 run key q >/dev/null
 sleep 0.5
 
+# The startup queries Claude Code sends, plus DSR and DA2, each answered as a terminal would.
+started=$(run start --tty --size 80x24 --out "$OUT" -- python3 "$here/query_probe.py")
+TAKE=$(printf '%s' "$started" | json 'j["take"]')
+run wait --text 'probe done' --timeout 10 >/dev/null || fail "query probe never finished"
+seen=$(screen_lines | grep '=' | tr '\n' '|')
+want='da1=\x1b[?62;22c|kitty=\x1b[?0u|xtversion=\x1bP>|rec '"$("$REC" --version 2>/dev/null | awk '{print $2}')"'\x1b\\|da2=\x1b[>1;10;0c|dsr=\x1b[0n|cpr=\x1b[1;1R|'
+[ "$seen" = "$want" ] || fail "query replies were $seen, wanted $want"
+grep -qF 'u001bP>|rec' "$TAKE/term.cast" && fail "a query reply leaked into term.cast"
+echo "ok: query replies" >&2
+run key Return >/dev/null
+sleep 0.5
+
 echo "PASS: $TAKE"

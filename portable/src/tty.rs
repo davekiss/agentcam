@@ -8,6 +8,7 @@ use crate::mouse::{mouse_off, Action, Protocol};
 use crate::output::OutputLog;
 use crate::protocol::{Cursor, ScreenText};
 use crate::recorder::{Capture, FinishReason, Journal, Msg, Started};
+use crate::terminal::Terminal;
 use portable_pty::{CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -18,7 +19,7 @@ use std::time::Duration;
 
 /// What the reader thread writes: the emulated screen and the plain-text output.
 struct Stream {
-    screen: Mutex<vt100::Parser>,
+    screen: Mutex<vt100::Parser<Terminal>>,
     output: Mutex<OutputLog>,
     eof: AtomicBool,
 }
@@ -28,7 +29,8 @@ struct Tty {
     /// Output cursor taken just before the last input byte reached the PTY, so whatever the
     /// program writes in response lands after it.
     input_mark: AtomicU64,
-    pty_in: Mutex<Box<dyn Write + Send>>,
+    /// Shared with the reader thread, which writes the terminal's replies to queries.
+    pty_in: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     reader_done: Mutex<Receiver<()>>,
 }
@@ -84,12 +86,19 @@ pub fn start(dir: &Path, command: &[String], size: Size, tx: Sender<Msg>) -> Res
 
     let (done_tx, done_rx) = mpsc::channel();
     let stream = Arc::new(Stream {
-        screen: Mutex::new(vt100::Parser::new(size.rows, size.cols, 0)),
+        screen: Mutex::new(vt100::Parser::new_with_callbacks(
+            size.rows,
+            size.cols,
+            0,
+            Terminal::default(),
+        )),
         output: Mutex::new(OutputLog::new(OutputLog::CAP)),
         eof: AtomicBool::new(false),
     });
+    let pty_in: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(writer));
     {
         let tty = stream.clone();
+        let pty_in = pty_in.clone();
         let t0 = journal.t0();
         std::thread::spawn(move || {
             let mut utf8 = Utf8Buffer::default();
@@ -100,7 +109,16 @@ pub fn start(dir: &Path, command: &[String], size: Size, tx: Sender<Msg>) -> Res
                     Ok(n) => n,
                 };
                 let t = t0.elapsed().as_secs_f64();
-                tty.screen.lock().unwrap().process(&buf[..n]);
+                let replies = {
+                    let mut screen = tty.screen.lock().unwrap();
+                    screen.process(&buf[..n]);
+                    screen.callbacks_mut().take_replies()
+                };
+                // Replies are input to the program, so they go to the PTY and not to term.cast.
+                if !replies.is_empty() {
+                    let mut w = pty_in.lock().unwrap();
+                    let _ = w.write_all(&replies).and_then(|_| w.flush());
+                }
                 tty.output.lock().unwrap().push(&buf[..n]);
                 if let Err(e) = cast.output(t, &utf8.push(&buf[..n])) {
                     let _ = tx.send(Msg::failed(RecError::io("write term.cast", e)));
@@ -117,7 +135,7 @@ pub fn start(dir: &Path, command: &[String], size: Size, tx: Sender<Msg>) -> Res
         capture: Box::new(Tty {
             stream,
             input_mark: AtomicU64::new(0),
-            pty_in: Mutex::new(writer),
+            pty_in,
             child: Mutex::new(child),
             reader_done: Mutex::new(done_rx),
         }),
