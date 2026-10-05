@@ -315,7 +315,11 @@ mod tests {
         p.process(b"\x1b[<u");
         assert_eq!(flags(&p), 1, "a pop restores what the push saved");
         p.process(b"\x1b[<5u");
-        assert_eq!(flags(&p), 0, "a pop that empties the stack resets the flags");
+        assert_eq!(
+            flags(&p),
+            0,
+            "a pop that empties the stack resets the flags"
+        );
         p.process(b"\x1b[<u");
         assert_eq!(flags(&p), 0);
     }
@@ -346,6 +350,10 @@ mod tests {
         p.process(b"\x1b[?1049h");
         assert_eq!(flags(&p), 15);
         p.process(b"\x1b[<u\x1b[?1049l");
-        assert_eq!(flags(&p), 1, "popping on the alternate screen left the main stack alone");
+        assert_eq!(
+            flags(&p),
+            1,
+            "popping on the alternate screen left the main stack alone"
+        );
     }
 }

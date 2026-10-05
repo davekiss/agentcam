@@ -56,14 +56,49 @@ const NAMED: &[(&str, Seq, Kitty, u32)] = &[
     ("tab", Seq::Fixed(b"\t"), Kitty::Control(9), 0xff09),
     ("escape", Seq::Fixed(b"\x1b"), Kitty::U(27), 0xff1b),
     ("esc", Seq::Fixed(b"\x1b"), Kitty::U(27), 0xff1b),
-    ("backspace", Seq::Fixed(b"\x7f"), Kitty::Control(127), 0xff08),
+    (
+        "backspace",
+        Seq::Fixed(b"\x7f"),
+        Kitty::Control(127),
+        0xff08,
+    ),
     ("space", Seq::Fixed(b" "), Kitty::Text(' '), 0x0020),
-    ("up", Seq::Cursor(b"\x1b[A", b"\x1bOA"), Kitty::Letter(b'A'), 0xff52),
-    ("down", Seq::Cursor(b"\x1b[B", b"\x1bOB"), Kitty::Letter(b'B'), 0xff54),
-    ("right", Seq::Cursor(b"\x1b[C", b"\x1bOC"), Kitty::Letter(b'C'), 0xff53),
-    ("left", Seq::Cursor(b"\x1b[D", b"\x1bOD"), Kitty::Letter(b'D'), 0xff51),
-    ("home", Seq::Cursor(b"\x1b[H", b"\x1bOH"), Kitty::Letter(b'H'), 0xff50),
-    ("end", Seq::Cursor(b"\x1b[F", b"\x1bOF"), Kitty::Letter(b'F'), 0xff57),
+    (
+        "up",
+        Seq::Cursor(b"\x1b[A", b"\x1bOA"),
+        Kitty::Letter(b'A'),
+        0xff52,
+    ),
+    (
+        "down",
+        Seq::Cursor(b"\x1b[B", b"\x1bOB"),
+        Kitty::Letter(b'B'),
+        0xff54,
+    ),
+    (
+        "right",
+        Seq::Cursor(b"\x1b[C", b"\x1bOC"),
+        Kitty::Letter(b'C'),
+        0xff53,
+    ),
+    (
+        "left",
+        Seq::Cursor(b"\x1b[D", b"\x1bOD"),
+        Kitty::Letter(b'D'),
+        0xff51,
+    ),
+    (
+        "home",
+        Seq::Cursor(b"\x1b[H", b"\x1bOH"),
+        Kitty::Letter(b'H'),
+        0xff50,
+    ),
+    (
+        "end",
+        Seq::Cursor(b"\x1b[F", b"\x1bOF"),
+        Kitty::Letter(b'F'),
+        0xff57,
+    ),
     ("pageup", Seq::Fixed(b"\x1b[5~"), Kitty::Tilde(5), 0xff55),
     ("pagedown", Seq::Fixed(b"\x1b[6~"), Kitty::Tilde(6), 0xff56),
     ("insert", Seq::Fixed(b"\x1b[2~"), Kitty::Tilde(2), 0xff63),
@@ -147,7 +182,12 @@ enum Key {
 }
 
 fn named(name: &str) -> Key {
-    Key::Named(NAMED.iter().position(|(n, ..)| *n == name).expect("a named key"))
+    Key::Named(
+        NAMED
+            .iter()
+            .position(|(n, ..)| *n == name)
+            .expect("a named key"),
+    )
 }
 
 fn parse(combo: &str) -> Result<(Mods, Key)> {
@@ -252,7 +292,13 @@ fn kitty(mods: Mods, key: Key, keyboard: Keyboard) -> Vec<u8> {
         }
         Key::Char(c) => {
             let (base, shifted) = unshift(c);
-            (Kitty::Text(base), Mods { shift: mods.shift || shifted, ..mods })
+            (
+                Kitty::Text(base),
+                Mods {
+                    shift: mods.shift || shifted,
+                    ..mods
+                },
+            )
         }
     };
     let plain = mods == Mods::default();
@@ -489,7 +535,10 @@ mod tests {
     }
 
     fn typed(flags: u8, text: &str) -> String {
-        let bytes: Vec<u8> = text.chars().flat_map(|c| encode_char(c, kitty(flags))).collect();
+        let bytes: Vec<u8> = text
+            .chars()
+            .flat_map(|c| encode_char(c, kitty(flags)))
+            .collect();
         String::from_utf8(bytes).unwrap()
     }
 
@@ -497,7 +546,11 @@ mod tests {
     fn disambiguate_encodes_chords_and_escape_as_csi_u() {
         assert_eq!(k(1, "ctrl+j"), "\x1b[106;5u", "no longer LF");
         assert_eq!(k(1, "ctrl+c"), "\x1b[99;5u");
-        assert_eq!(k(1, "ctrl+C"), "\x1b[99;5u", "a letter under ctrl is its key");
+        assert_eq!(
+            k(1, "ctrl+C"),
+            "\x1b[99;5u",
+            "a letter under ctrl is its key"
+        );
         assert_eq!(k(1, "Escape"), "\x1b[27u");
         assert_eq!(k(1, "alt+x"), "\x1b[120;3u");
         assert_eq!(k(1, "ctrl+alt+d"), "\x1b[100;7u");
@@ -528,7 +581,11 @@ mod tests {
         assert_eq!(k(1, "shift+Return"), "\x1b[13;2u");
         assert_eq!(k(1, "ctrl+Return"), "\x1b[13;5u");
         assert_eq!(k(1, "shift+Tab"), "\x1b[9;2u");
-        assert_eq!(k(1, "ctrl+shift+Tab"), "\x1b[9;6u", "the spec's fixterms erratum");
+        assert_eq!(
+            k(1, "ctrl+shift+Tab"),
+            "\x1b[9;6u",
+            "the spec's fixterms erratum"
+        );
         assert_eq!(k(1, "alt+BackSpace"), "\x1b[127;3u");
     }
 
@@ -574,7 +631,11 @@ mod tests {
         assert_eq!(k(8 | 16, "a"), "\x1b[97;;97u");
         // The spec's example: shift+a -> CSI 97 ; 2 ; 65 u.
         assert_eq!(k(8 | 16, "shift+a"), "\x1b[57441;2u\x1b[97;2;65u");
-        assert_eq!(k(8 | 16, "ctrl+a"), "\x1b[57442;5u\x1b[97;5u", "a chord types no text");
+        assert_eq!(
+            k(8 | 16, "ctrl+a"),
+            "\x1b[57442;5u\x1b[97;5u",
+            "a chord types no text"
+        );
         assert_eq!(typed(8 | 16, "é"), "\x1b[233;;233u");
     }
 
@@ -584,7 +645,11 @@ mod tests {
         assert_eq!(k(1 | 4, "ctrl+a"), "\x1b[97;5u");
         assert_eq!(k(1 | 4, "ctrl+shift+2"), "\x1b[50:64;6u");
         assert_eq!(k(1 | 4, "shift+Tab"), "\x1b[9;2u");
-        assert_eq!(k(1 | 4, "a"), "a", "only keys already sent as escape codes change");
+        assert_eq!(
+            k(1 | 4, "a"),
+            "a",
+            "only keys already sent as escape codes change"
+        );
     }
 
     #[test]
