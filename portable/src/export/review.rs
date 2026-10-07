@@ -192,7 +192,7 @@ impl Reviewer {
             self.activity.resize(second + 1, 0.0);
         }
         self.activity[second] = self.activity[second].max(change);
-        if f % blank_stride() == 0 {
+        if f.is_multiple_of(blank_stride()) {
             self.blank.push(blank(frame, self.width, self.height));
         }
         if self.tile_frames.last() == Some(&f) {
