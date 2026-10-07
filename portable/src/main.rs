@@ -100,6 +100,14 @@ enum Cmd {
     },
     /// Render a take to MP4.
     Export(ExportArgs),
+    /// Review an MP4, or each export in a take: activity, idle spans, checks, a contact sheet.
+    Review {
+        /// An MP4 file, or a take folder path or take id.
+        target: String,
+        /// Also write the frame at this many seconds as a full-size PNG; repeatable.
+        #[arg(long = "at", value_name = "SECONDS")]
+        at: Vec<f64>,
+    },
     /// Report the platform and what each source needs.
     Doctor,
     /// List what can be captured.
@@ -290,6 +298,7 @@ fn run(cmd: Cmd) -> Result<Value> {
             (None, None) => unreachable!("clap requires one"),
         },
         Cmd::Export(args) => export(args),
+        Cmd::Review { target, at } => review(&target, &at),
         Cmd::Doctor => Ok(doctor()),
         Cmd::Sources => Ok(json!({ "tty": true, "x11": x11_missing().is_empty() })),
     }
@@ -619,6 +628,9 @@ fn export(args: ExportArgs) -> Result<Value> {
             pacing,
         },
     )?;
+    if upload.is_some() {
+        refuse_failed_reviews(&exports)?;
+    }
     let take_id = paths::take_id(&dir);
     let exports = exports
         .into_iter()
@@ -631,6 +643,79 @@ fn export(args: ExportArgs) -> Result<Value> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(json!({ "take": dir, "exports": exports }))
+}
+
+/// A broken video is not delivered: with any error check, nothing uploads.
+fn refuse_failed_reviews(exports: &[export::Export]) -> Result<()> {
+    let failed: Vec<String> = exports
+        .iter()
+        .filter(|e| e.review.errors().next().is_some())
+        .map(|e| {
+            let errors: Vec<String> = e
+                .review
+                .errors()
+                .map(|c| {
+                    format!(
+                        "{} ({})",
+                        serde_json::to_value(c.code)
+                            .expect("serializable")
+                            .as_str()
+                            .unwrap_or_default(),
+                        c.message
+                    )
+                })
+                .collect();
+            format!(
+                "{} failed review: {}; look at {}",
+                e.path.display(),
+                errors.join(", "),
+                e.review.sheet.display()
+            )
+        })
+        .collect();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(RecError::new(
+        "review_failed",
+        format!(
+            "nothing was uploaded. {}. The MP4s and sheets are still on disk.",
+            failed.join(". ")
+        ),
+    ))
+}
+
+/// `rec review`: one MP4, or every export in a take.
+fn review(target: &str, at: &[f64]) -> Result<Value> {
+    let file = PathBuf::from(target);
+    if file.is_file() {
+        return Ok(json!(export::review::review_file(&file, at)?));
+    }
+    let dir = paths::resolve_take(target)?;
+    let mut videos: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|e| RecError::io(&dir.display().to_string(), e))?
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("export-") && n.ends_with(".mp4"))
+        })
+        .collect();
+    videos.sort();
+    if videos.is_empty() {
+        return Err(RecError::new(
+            "not_found",
+            format!(
+                "{} has no export-*.mp4; run rec export first",
+                dir.display()
+            ),
+        ));
+    }
+    let reviews = videos
+        .iter()
+        .map(|v| export::review::review_file(v, at))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(json!({ "take": dir, "reviews": reviews }))
 }
 
 fn read_plan(path: &std::path::Path) -> Result<export::tighten::Plan> {
