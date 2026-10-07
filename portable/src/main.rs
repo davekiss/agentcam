@@ -185,7 +185,10 @@ impl RecordArgs {
             let size = match (&self.for_layout, self.size) {
                 (Some(layout), _) => export::grid_for(layout)?,
                 (None, Some(d)) => Size::try_from(d).map_err(bad)?,
-                (None, None) => Size { cols: 120, rows: 36 },
+                (None, None) => Size {
+                    cols: 120,
+                    rows: 36,
+                },
             };
             return Ok(Source::Tty { command, size });
         }
@@ -202,9 +205,11 @@ impl RecordArgs {
 fn record_flags(source: &Source) -> Vec<String> {
     let (kind, size, command) = match source {
         Source::Tty { command, size } => ("--tty", format!("{}x{}", size.cols, size.rows), command),
-        Source::X11 { command, frame } => {
-            ("--x11", format!("{}x{}", frame.width, frame.height), command)
-        }
+        Source::X11 { command, frame } => (
+            "--x11",
+            format!("{}x{}", frame.width, frame.height),
+            command,
+        ),
     };
     let mut flags = vec![kind.to_string(), "--size".into(), size];
     if !command.is_empty() {
@@ -238,7 +243,9 @@ fn run(cmd: Cmd) -> Result<Value> {
         Cmd::Stop => stop(),
         Cmd::Status => status(),
         Cmd::Mark { label } => match call(&Request::Mark { label })? {
-            Response::Marked { take, t, label } => Ok(json!({ "take": take, "t": t, "label": label })),
+            Response::Marked { take, t, label } => {
+                Ok(json!({ "take": take, "t": t, "label": label }))
+            }
             other => unexpected(other),
         },
         Cmd::Type {

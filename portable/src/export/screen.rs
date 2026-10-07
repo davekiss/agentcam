@@ -298,7 +298,11 @@ impl Frames for ScreenFrames<'_> {
                 (panel, cam.x().round() / scale, 1.0 / scale)
             }
         };
-        let look = self.take.overlay.as_ref().and_then(|p| p.look(t, self.cursor));
+        let look = self
+            .take
+            .overlay
+            .as_ref()
+            .and_then(|p| p.look(t, self.cursor));
         if !changed && self.shown == Some(left) && look == self.drawn {
             return Ok(false);
         }

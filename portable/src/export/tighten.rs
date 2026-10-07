@@ -762,11 +762,21 @@ mod tests {
         let events = [
             TimedEvent {
                 t: 1.0,
-                event: Event::Click { x, y, button: Button::Left },
+                event: Event::Click {
+                    x,
+                    y,
+                    button: Button::Left,
+                },
             },
             TimedEvent {
                 t: 2.0,
-                event: Event::Drag { x1: x, y1: y, x2, y2, button: Button::Right },
+                event: Event::Drag {
+                    x1: x,
+                    y1: y,
+                    x2,
+                    y2,
+                    button: Button::Right,
+                },
             },
             TimedEvent {
                 t: 3.0,

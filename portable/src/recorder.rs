@@ -530,7 +530,10 @@ mod tests {
 
     #[test]
     fn a_line_runs_end_to_end_without_repeating_a_point() {
-        assert_eq!(line((0, 0), (8, 4), 4), vec![(0, 0), (2, 1), (4, 2), (6, 3), (8, 4)]);
+        assert_eq!(
+            line((0, 0), (8, 4), 4),
+            vec![(0, 0), (2, 1), (4, 2), (6, 3), (8, 4)]
+        );
         assert_eq!(line((3, 1), (5, 1), 8), vec![(3, 1), (4, 1), (5, 1)]);
         assert_eq!(line((7, 7), (7, 7), 8), vec![(7, 7)]);
         assert_eq!(line((10, 0), (0, 0), 2), vec![(10, 0), (5, 0), (0, 0)]);
@@ -548,7 +551,12 @@ mod tests {
         assert_eq!(position(&tty, 0, 24).unwrap_err().code, "bad_args");
         let x11 = Source::X11 {
             command: vec![],
-            frame: Frame { x: 0, y: 0, width: 1920, height: 1080 },
+            frame: Frame {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
         };
         assert_eq!(position(&x11, 960, 0).unwrap(), (0.5, 0.0));
         assert_eq!(position(&x11, 1920, 0).unwrap_err().code, "bad_args");

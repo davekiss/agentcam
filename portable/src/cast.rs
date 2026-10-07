@@ -152,7 +152,10 @@ mod tests {
     #[test]
     fn output_lines_are_asciicast_v2() {
         assert_eq!(output_line(1.5, "hi\r\n"), r#"[1.5,"o","hi\r\n"]"#);
-        assert_eq!(output_line(0.1234567, "\x1b[1m"), r#"[0.123457,"o","\u001b[1m"]"#);
+        assert_eq!(
+            output_line(0.1234567, "\x1b[1m"),
+            r#"[0.123457,"o","\u001b[1m"]"#
+        );
         let h = Header {
             version: 2,
             width: 100,

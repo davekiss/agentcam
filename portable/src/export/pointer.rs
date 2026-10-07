@@ -91,10 +91,7 @@ impl Pointer {
             let (x, y) = match e.event {
                 Event::Cursor { x, y } => (x, y),
                 // A drag ripples at its press; the cursor samples carry the motion after it.
-                Event::Click { x, y, .. }
-                | Event::Drag {
-                    x1: x, y1: y, ..
-                } => {
+                Event::Click { x, y, .. } | Event::Drag { x1: x, y1: y, .. } => {
                     clicks.push(Sample { t: e.t, x, y });
                     (x, y)
                 }
@@ -412,7 +409,10 @@ mod tests {
         assert_eq!((ripple.x, ripple.y, ripple.progress), (0.1, 0.2, 0.0));
         let after = p.look(4.2, CursorMode::Auto).unwrap();
         assert_eq!((after.x, after.y), (0.9, 0.2));
-        assert!(p.look(3.0, CursorMode::Auto).is_none(), "idle before the lead-in");
+        assert!(
+            p.look(3.0, CursorMode::Auto).is_none(),
+            "idle before the lead-in"
+        );
     }
 
     /// Idle at the middle from t0, a move at 5s, a click at 10s, idle after.

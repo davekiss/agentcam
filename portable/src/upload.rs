@@ -263,7 +263,10 @@ mod tests {
         );
         assert!(matches!(
             Target::parse("blob:private", env(&[(BLOB_TOKEN_VAR, "t")])).unwrap(),
-            Target::Blob { access: Access::Private, .. }
+            Target::Blob {
+                access: Access::Private,
+                ..
+            }
         ));
     }
 

@@ -190,7 +190,12 @@ impl<'a> Renderer<'a> {
                 if bg != t.background {
                     fill(buf, self.width, rect, bg);
                 }
-                if let Some(c) = cell.contents().chars().next().filter(|c| !c.is_whitespace()) {
+                if let Some(c) = cell
+                    .contents()
+                    .chars()
+                    .next()
+                    .filter(|c| !c.is_whitespace())
+                {
                     let key = GlyphKey {
                         c,
                         bold: cell.bold(),
@@ -335,15 +340,25 @@ mod tests {
     fn fallback_glyphs_fit_inside_their_cells() {
         let fonts = Fonts::load();
         let preset = layout::PRESETS[0];
-        let grid = Size { cols: 100, rows: 30 };
+        let grid = Size {
+            cols: 100,
+            rows: 30,
+        };
         let fit = layout::fit(&preset, grid, fonts.cell_metrics(), None).unwrap();
         let theme = theme::by_name("dark").unwrap();
         let renderer = Renderer::new(&fonts, theme, fit, preset.width, preset.height);
         for c in "✔⏺⎿⣿↵".chars() {
-            assert!(fonts.resolve(c, false).unwrap().fallback, "{c} should come from a fallback");
+            assert!(
+                fonts.resolve(c, false).unwrap().fallback,
+                "{c} should come from a fallback"
+            );
             for span in [1, 2] {
                 let g = renderer
-                    .place(GlyphKey { c, bold: false, span })
+                    .place(GlyphKey {
+                        c,
+                        bold: false,
+                        span,
+                    })
                     .expect("resolves");
                 assert!(g.coverage.iter().any(|&a| a > 0), "{c} has no ink");
                 assert!(

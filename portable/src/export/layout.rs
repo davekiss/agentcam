@@ -577,7 +577,10 @@ mod tests {
         let f = fit(&p, grid(100, 30), JBM, None).unwrap();
         let bigger = (f.cell_h + 1) as f32 / JBM.line_height;
         assert!(fit(&p, grid(100, 30), JBM, Some(bigger)).is_err());
-        assert!(f.cell_w >= 10, "100 cols on 1920 should get >= 10px cells: {f:?}");
+        assert!(
+            f.cell_w >= 10,
+            "100 cols on 1920 should get >= 10px cells: {f:?}"
+        );
     }
 
     #[test]
@@ -616,8 +619,16 @@ mod tests {
             };
             assert_inside_margin(p, &f);
             let (aw, ah) = avail(p);
-            assert!(aw - f.panel.w < f.cell_w, "{}: {f:?} leaves a column empty", p.aspect);
-            assert!(ah - f.panel.h < f.cell_h, "{}: {f:?} leaves a row empty", p.aspect);
+            assert!(
+                aw - f.panel.w < f.cell_w,
+                "{}: {f:?} leaves a column empty",
+                p.aspect
+            );
+            assert!(
+                ah - f.panel.h < f.cell_h,
+                "{}: {f:?} leaves a row empty",
+                p.aspect
+            );
         }
     }
 
@@ -629,10 +640,20 @@ mod tests {
             let Viewport::Follow(f) = viewport(&p, g, &[], JBM, None).unwrap() else {
                 panic!("{g:?} should pan on 9:16");
             };
-            assert_eq!((f.panel.x, f.panel.w), (p.margin, aw), "{g:?} window spans the width");
+            assert_eq!(
+                (f.panel.x, f.panel.w),
+                (p.margin, aw),
+                "{g:?} window spans the width"
+            );
             assert_eq!(f.panel.h, f.surface.panel.h, "{g:?} window shows every row");
-            assert!(ah - f.panel.h < f.surface.cell_h, "{g:?} rows fill the height: {f:?}");
-            assert!(f.surface.panel.w > f.panel.w, "{g:?} surface is wider than its window");
+            assert!(
+                ah - f.panel.h < f.surface.cell_h,
+                "{g:?} rows fill the height: {f:?}"
+            );
+            assert!(
+                f.surface.panel.w > f.panel.w,
+                "{g:?} surface is wider than its window"
+            );
             assert!(f.surface.grid_y + g.rows as u32 * f.surface.cell_h <= f.surface.panel.h);
         }
         for g in [grid(60, 40), grid(52, 45), grid(40, 60)] {
@@ -663,7 +684,12 @@ mod tests {
                 panic!("{} screen {w}x{h} should fit {}", p.aspect, p.aspect);
             };
             assert_eq!((panel.w, panel.h), (w, h), "{}: no scaling", p.aspect);
-            assert_eq!((panel.x, panel.y), (p.margin, p.margin), "{}: inside the margin", p.aspect);
+            assert_eq!(
+                (panel.x, panel.y),
+                (p.margin, p.margin),
+                "{}: inside the margin",
+                p.aspect
+            );
         }
         assert_eq!(screen_for(&preset("9:16").unwrap()), (1000, 1840));
         assert_eq!(screen_for(&preset("16:9").unwrap()), (1776, 936));
@@ -672,7 +698,12 @@ mod tests {
     #[test]
     fn a_landscape_screen_follows_on_vertical_and_fits_on_landscape() {
         let v = preset("9:16").unwrap();
-        let ScreenViewport::Follow { panel, scale, surface_w } = screen_viewport(&v, 1920, 1080) else {
+        let ScreenViewport::Follow {
+            panel,
+            scale,
+            surface_w,
+        } = screen_viewport(&v, 1920, 1080)
+        else {
             panic!("1920x1080 should pan on 9:16");
         };
         assert_eq!((panel.x, panel.w, panel.h), (40, 1000, 1840));
@@ -683,7 +714,10 @@ mod tests {
             panic!("16:9 never pans");
         };
         assert_eq!((panel.w, panel.h), (1664, 936));
-        assert!(matches!(screen_viewport(&v, 1080, 1920), ScreenViewport::Fit { .. }));
+        assert!(matches!(
+            screen_viewport(&v, 1080, 1920),
+            ScreenViewport::Fit { .. }
+        ));
     }
 
     #[test]

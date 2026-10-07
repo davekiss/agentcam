@@ -277,8 +277,16 @@ mod tests {
             cursor: Some((x, x)),
         };
         cam.place(at(1635.0));
-        assert_eq!(cam.x(), 1135.0, "first frame centers on the pointer with no glide");
-        assert_eq!(run(&mut cam, at(1400.0), 30), vec![1135.0; 30], "inside the dead zone");
+        assert_eq!(
+            cam.x(),
+            1135.0,
+            "first frame centers on the pointer with no glide"
+        );
+        assert_eq!(
+            run(&mut cam, at(1400.0), 30),
+            vec![1135.0; 30],
+            "inside the dead zone"
+        );
         let x = *run(&mut cam, at(3200.0), 90).last().unwrap();
         assert_eq!(x, 2271.0, "pinned to the right edge of the surface");
     }

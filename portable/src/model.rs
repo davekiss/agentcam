@@ -77,7 +77,10 @@ impl TryFrom<Dims> for Frame {
     /// H.264 in yuv420p needs even sides.
     fn try_from(d: Dims) -> std::result::Result<Frame, String> {
         if d.w < 64 || d.h < 64 || d.w > 7680 || d.h > 7680 {
-            return Err(format!("screen {}x{} must be 64..=7680 pixels a side", d.w, d.h));
+            return Err(format!(
+                "screen {}x{} must be 64..=7680 pixels a side",
+                d.w, d.h
+            ));
         }
         if d.w % 2 == 1 || d.h % 2 == 1 {
             return Err(format!("screen {}x{} needs even sides for H.264", d.w, d.h));
@@ -362,7 +365,8 @@ mod tests {
 
     #[test]
     fn a_screen_track_without_a_pointer_field_has_it_baked_in() {
-        let old = r#"{"kind":"screen","file":"screen.mp4","offset":0.5,"width":1920,"height":1080}"#;
+        let old =
+            r#"{"kind":"screen","file":"screen.mp4","offset":0.5,"width":1920,"height":1080}"#;
         let Track::Screen { pointer, .. } = serde_json::from_str(old).unwrap() else {
             panic!("a screen track");
         };
@@ -403,7 +407,13 @@ mod tests {
 
     #[test]
     fn size_parses_cols_by_rows() {
-        assert_eq!("120x36".parse::<Size>(), Ok(Size { cols: 120, rows: 36 }));
+        assert_eq!(
+            "120x36".parse::<Size>(),
+            Ok(Size {
+                cols: 120,
+                rows: 36
+            })
+        );
         assert!("120".parse::<Size>().is_err());
         assert!("0x10".parse::<Size>().is_err());
     }

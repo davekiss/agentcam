@@ -147,7 +147,9 @@ mod tests {
     fn same_second_takes_get_numbered_suffixes() {
         let out = std::env::temp_dir().join(format!("rec-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
-        let now = chrono::Local.with_ymd_and_hms(2026, 10, 2, 21, 35, 1).unwrap();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 10, 2, 21, 35, 1)
+            .unwrap();
         let ids: Vec<String> = (0..3)
             .map(|_| take_id(&create_take_dir(&out, now).unwrap()))
             .collect();

@@ -3,12 +3,12 @@
 
 mod border;
 mod camera;
-pub mod pointer;
 pub mod layout;
+pub mod pointer;
 mod render;
 mod screen;
-pub mod tighten;
 pub mod theme;
+pub mod tighten;
 mod view;
 
 use crate::error::{RecError, Result};
@@ -250,8 +250,7 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                     path.display(),
                     viewport.kind()
                 );
-                let mut source =
-                    screen::ScreenFrames::new(
+                let mut source = screen::ScreenFrames::new(
                     &ffmpeg,
                     take,
                     preset,

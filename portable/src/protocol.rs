@@ -120,7 +120,10 @@ pub fn socket_path(take: &Path) -> PathBuf {
 /// under a deep `--out` exceed that. Binding or connecting by bare filename from inside
 /// the folder sidesteps the cap. Callers are single-threaded at this point, so the brief
 /// cwd change is not observed by anyone else.
-fn via_short_path<T>(path: &Path, f: impl FnOnce(&Path) -> std::io::Result<T>) -> std::io::Result<T> {
+fn via_short_path<T>(
+    path: &Path,
+    f: impl FnOnce(&Path) -> std::io::Result<T>,
+) -> std::io::Result<T> {
     const SAFE_LEN: usize = 100;
     if path.as_os_str().len() < SAFE_LEN {
         return f(path);
@@ -137,7 +140,8 @@ fn via_short_path<T>(path: &Path, f: impl FnOnce(&Path) -> std::io::Result<T>) -
 
 pub fn bind(path: &Path) -> Result<UnixListener> {
     let _ = std::fs::remove_file(path);
-    via_short_path(path, |p| UnixListener::bind(p)).map_err(|e| RecError::io("bind control socket", e))
+    via_short_path(path, |p| UnixListener::bind(p))
+        .map_err(|e| RecError::io("bind control socket", e))
 }
 
 pub fn read_message<T: for<'de> Deserialize<'de>>(stream: &UnixStream) -> Result<T> {
@@ -146,7 +150,10 @@ pub fn read_message<T: for<'de> Deserialize<'de>>(stream: &UnixStream) -> Result
         .read_line(&mut line)
         .map_err(|e| RecError::io("read control socket", e))?;
     if line.is_empty() {
-        return Err(RecError::new("recorder_gone", "recorder closed the connection"));
+        return Err(RecError::new(
+            "recorder_gone",
+            "recorder closed the connection",
+        ));
     }
     serde_json::from_str(&line).map_err(|e| RecError::new("protocol", format!("{e}: {line}")))
 }
