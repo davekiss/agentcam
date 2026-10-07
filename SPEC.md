@@ -79,6 +79,7 @@ It sends no focus reports (`CSI I`, `CSI O`), even when the program turns on `?1
   recorder.log     stderr of the background recorder
   export-16x9.mp4  written by `rec export`
   export-9x16.mp4
+  export-9x16.sheet.png  contact sheet from export's review (see Review)
 ```
 
 The default `<out>` is `~/Movies/rec` on macOS and `$XDG_DATA_HOME/rec` (falling back to `~/.local/share/rec`) on Linux.
@@ -179,7 +180,8 @@ Each driving command records itself in the timeline and returns `{"t"}` on the t
 
 ### Composing and delivering
 
-- `rec export <take> [--layout 16:9] [--layout 9:16] [--region COL,ROW,COLS,ROWS ...] [--border] [--cursor auto|always|never] [--tighten [--plan-out <file>]] [--plan <file>] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "regions"?, "path", "width", "height", "duration", "url"?, "tightened"?}]}`. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows, `follow` when 9:16 crops a wide grid to a panning window, and `stack` when `--region` picks the cells to show (see Export). A `stack` export lists `regions` in the order given, each as `{"col", "row", "cols", "rows", "panel": {"x", "y", "w", "h"}}` with its panel in canvas pixels. `--region` is repeatable, counts grid cells from 0, and fails with `bad_args` when a region is empty or reaches past the take's grid; on an `x11` take it fails with `not_supported`, since pixel regions are a later step. `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export. Tighten reads the terminal stream, so `--tighten`, `--plan-out`, and `--plan` fail with `not_supported` on an `x11` take; a pixel-diff tighten is a later step. `--tighten --plan-out` writes that edit as a plan file instead of rendering, and `--plan` renders with an edited plan (see Plans).
+- `rec export <take> [--layout 16:9] [--layout 9:16] [--region COL,ROW,COLS,ROWS ...] [--border] [--cursor auto|always|never] [--tighten [--plan-out <file>]] [--plan <file>] [--theme <name>] [--font <name>] [--upload <target>]` composes the take and prints `{"take", "exports": [{"layout", "viewport", "regions"?, "path", "width", "height", "duration", "url"?, "tightened"?, "review"}]}`. Every export reviews itself as it encodes, and `review` carries the result (see Review); there is no flag to skip it. With no `--layout`, it exports both. `viewport` is `fit` when the whole grid shows, `follow` when 9:16 crops a wide grid to a panning window, and `stack` when `--region` picks the cells to show (see Export). A `stack` export lists `regions` in the order given, each as `{"col", "row", "cols", "rows", "panel": {"x", "y", "w", "h"}}` with its panel in canvas pixels. `--region` is repeatable, counts grid cells from 0, and fails with `bad_args` when a region is empty or reaches past the take's grid; on an `x11` take it fails with `not_supported`, since pixel regions are a later step. `url` is present only with `--upload`. `--tighten` retimes the take so its pacing follows the program rather than the agent driving it (see Tighten), and adds `tightened` to each export. Tighten reads the terminal stream, so `--tighten`, `--plan-out`, and `--plan` fail with `not_supported` on an `x11` take; a pixel-diff tighten is a later step. `--tighten --plan-out` writes that edit as a plan file instead of rendering, and `--plan` renders with an edited plan (see Plans).
+- `rec review <file.mp4 | take> [--at <seconds> ...]` runs the same review over an existing MP4, decoded by ffmpeg at 30 fps, and writes `<name>.sheet.png` next to it. Each `--at` also writes the frame at that time, full size, to `<name>.at-<seconds>.png` (the last frame when the time is past the end). For a file it prints the review plus `{"path", "frames": [{"t", "png"}]}`. For a take folder or id it reviews each `export-*.mp4` in it and prints `{"take", "reviews": [...]}`. Export does not use this command; it is for checking a file again.
 - `rec sources` lists what can be captured: macOS displays and windows, plus `{"tty": true, "x11": <bool>}`. `x11` is true when `Xvfb` and `ffmpeg` are on `PATH`.
 - `rec doctor` reports the platform, what each source kind needs, and what is missing, as JSON. Agents run it first. Its `sources.x11` is `{"ok", "needs": ["Xvfb", "ffmpeg"], "missing"}`, and a missing `Xvfb` also appears in the top-level `missing`.
 
@@ -187,6 +189,8 @@ The VM, and the take folder with it, is gone when the session ends, so delivery 
 
 - `blob`: Vercel Blob, with the read-write token from `BLOB_READ_WRITE_TOKEN`. Each export goes to `rec/<take-id>/export-<layout>.mp4` with no random suffix, and exporting the same take again overwrites it. `blob` uploads public blobs; `blob:private` is for stores configured as private, which reject public uploads, and its URL needs the token to fetch. `url` is the URL the Blob API returns. The request matches what `put()` in `@vercel/blob` 2.8 sends (`PUT https://vercel.com/api/blob/?pathname=...`, API version 12). `REC_BLOB_API_URL` replaces the API base, for tests.
 - An `https://` URL: a presigned PUT, which S3, R2, GCS, and Mux direct uploads all hand out. It names one object, so it needs exactly one `--layout`, or export fails with `bad_args` before rendering. `url` is the presigned URL without its query string. Plain `http://` is accepted only for localhost.
+
+A broken video is never delivered. When any export's review has an `error` check, `--upload` sends nothing and fails with `review_failed`, whose message names each error check and the sheet to look at. The MP4s and sheets stay on disk. Warnings never block an upload.
 
 A missing token fails with `missing_credentials` naming the variable, before anything renders. A refused upload fails with `upload_failed`, carrying the HTTP status and the start of the response body. The export files stay on disk either way.
 
@@ -292,6 +296,41 @@ Tighten does not judge meaning: a fumbled input that gets undone, or which scree
 `rec export <take> --plan <file>` renders with an edited plan in place of the policy. It honors each segment's `out_len`, and `"drop": true` cuts the segment entirely. Take time still only moves forward, so the screen after a cut is exactly what the take showed then. A dropped `settled` segment still plays its 0.25s preroll when the input after it is kept, so the viewer sees that input land. The plan must come from the same take: the segment count, each `id`, `kind`, and `take` span (to the millisecond) must match what the take segments into, or export fails with `bad_args` before rendering. An unedited plan renders the same video as `--tighten`. `--plan` cannot be combined with `--tighten`, and `--plan-out` needs `--tighten`. Unknown fields in a plan are ignored, so a caller can annotate segments.
 
 An export opens at the latest video track offset, the first moment every video track has a picture, so it never starts on dead frames. Earlier media from any track is trimmed. Mic audio is muxed in with its offset applied. Output is H.264 + AAC MP4.
+
+### Review
+
+Agents film demos and file them without watching, so every export watches itself. Each frame written to the encoder also goes to a reviewer, the same one for `tty` and `x11` takes, and the export's JSON carries what it found:
+
+```json
+"review": {
+  "sheet": "/.../export-9x16.sheet.png",
+  "every": 1.0,
+  "activity": [0.0, 0.0685, 0.0, 0.0805, 0.0, 0.0, 0.0, 0.0007],
+  "idle": [{ "from": 4.0, "to": 7.0 }],
+  "checks": []
+}
+```
+
+A check looks like this:
+
+```json
+{ "code": "long_idle", "severity": "warning", "message": "nothing moves from 10s to 18s (8.0s); re-export with --tighten to cut dead air", "span": { "from": 10.0, "to": 18.0 } }
+```
+
+- `activity` has one value per second of video: the largest fraction of the canvas that any one frame in that second changed, rounded to 4 places. A pixel changes when a channel moves by more than 10, so a decoded video's encoder noise is not change. A pixel counts only when it differs from both of the last two distinct pictures, as in `rec wait --idle`, so a cursor blinking between two pictures is not change.
+- A second is idle when its activity is below 0.0001, about one typed character on the smallest export font. `idle` lists each run of 3 or more idle seconds.
+- `sheet` is a contact sheet PNG next to the MP4: a tile every `every` seconds from 0, plus the last frame, each labelled with its time. `every` is the video's length over 24, at least 1, rounded up to a half second, so a sheet has at most about 25 tiles. Tiles are about 270px on their short side, 6 to a row for 9:16 and 4 for 16:9.
+- A frame is blank when it is one flat color: every pixel matches the corner's color (the canvas) or the center's (the panel, which is always centered), so an app that drew nothing on a panel counts. Blank is sampled every 0.5s and on the last frame.
+- `checks` is empty when nothing is wrong. Each has a `code`, a `severity`, a `message`, and a `span` when it covers part of the video.
+
+| code | severity | when |
+|---|---|---|
+| `static` | error | every second after the first is idle: the program drew once and froze, or never ran |
+| `blank` | error | the last frame is blank, or more than half the samples are |
+| `blank` | warning | otherwise, a blank run of 1s or more |
+| `long_idle` | warning | an idle span of 7s or more, one second past tighten's longest reading hold, so a tightened export has one only when a plan held a screen that long. The message suggests `--tighten` on an untightened tty export. A `static` video gets no `long_idle` |
+
+The review costs about 0.1s on a 20-second 1080x1920 tty export (1.2s before, 1.3s after, measured on a Mac).
 
 ## Build order
 

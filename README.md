@@ -109,6 +109,14 @@ rec export <take> --layout 9:16 --plan plan.jev.json
 
 The x11 recording has no pointer baked in. Pointer positions and clicks go into the timeline, and export draws them back: hidden while the agent types, faded in when the mouse moves, with a ripple on each click. `--cursor always` and `--cursor never` are there when you want them.
 
+### It checks its own work
+
+Every export reviews itself. The JSON says how much changed each second, where nothing moved, and whether the video is blank or frozen, and a contact sheet lands next to the MP4 with a labelled frame every second or so. The agent can look at one PNG instead of trusting a file it never watched. A video that fails review is never uploaded: `--upload` refuses with `review_failed` and names the sheet to look at.
+
+```sh
+rec review export-9x16.mp4 --at 12   # check any MP4 again, and pull the frame at 12s
+```
+
 ### It delivers before the VM disappears
 
 `--upload blob` puts each export in Vercel Blob (`blob:private` for private stores) and adds its URL to the JSON. Any `https://` URL works as a presigned PUT, which covers S3, R2, GCS and Mux direct uploads.
@@ -126,7 +134,8 @@ The x11 recording has no pointer baked in. Pointer positions and clicks go into 
 | `rec screen [--png PATH]` | What's on screen now |
 | `rec mark LABEL` | Drop a marker on the take clock |
 | `rec status` / `stop` | Check on the take, or finish it and print take.json |
-| `rec export TAKE` | Compose 16:9 and 9:16 MP4s; `--tighten`, `--plan`, `--border`, `--cursor`, `--upload` |
+| `rec export TAKE` | Compose 16:9 and 9:16 MP4s, each reviewed with a contact sheet; `--tighten`, `--plan`, `--border`, `--cursor`, `--upload` |
+| `rec review FILE.mp4 \| TAKE [--at T]` | Review an MP4 again: activity, idle spans, checks, a contact sheet, and stills |
 | `rec doctor` / `sources` | What this machine can record, and what's missing |
 
 Failures print `{"error": {"code", "message"}}` and exit nonzero. [SPEC.md](SPEC.md) has every flag and JSON shape.
@@ -142,6 +151,7 @@ markers.jsonl    markers added while recording
 recorder.log     the background recorder's output
 export-16x9.mp4  written by rec export
 export-9x16.mp4
+export-9x16.sheet.png  the export's contact sheet, one frame every second or so
 ```
 
 Takes go to `~/.local/share/rec/` on Linux and `~/Movies/rec/` on macOS unless `--out` says otherwise. Recording and composing are separate, so one take exports to every layout, and an agent can fix sync or timing by editing the JSON.
