@@ -6,6 +6,7 @@ mod camera;
 pub mod layout;
 pub mod pointer;
 mod render;
+pub mod review;
 mod screen;
 pub mod theme;
 pub mod tighten;
@@ -56,6 +57,7 @@ pub struct Export {
     pub duration: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tightened: Option<tighten::Tightened>,
+    pub review: review::Review,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,11 +198,16 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
     };
     let ffmpeg = find_ffmpeg()?;
     let fonts = render::Fonts::load();
+    let advice = match (&loaded.recording, &opts.pacing) {
+        (_, Pacing::Tighten | Pacing::Plan(_)) => review::Advice::Tightened,
+        (Recording::Tty(_), Pacing::Raw) => review::Advice::Tighten,
+        (Recording::Screen(_), Pacing::Raw) => review::Advice::Cut,
+    };
 
     let mut out = Vec::new();
     for preset in &opts.layouts {
         let path = dir.join(format!("export-{}.mp4", preset.slug));
-        let (frames, kind, regions) = match &loaded.recording {
+        let (frames, kind, regions, reviewer) = match &loaded.recording {
             Recording::Tty(tty) => {
                 let frames = ((map.duration() * FPS as f64).round() as u64).max(1);
                 let viewport = layout::viewport(
@@ -236,8 +243,8 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                     view: view::View::new(&fonts, opts.theme, viewport, preset),
                     next: 0,
                 };
-                encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
-                (frames, kind, regions)
+                let reviewer = encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
+                (frames, kind, regions, reviewer)
             }
             Recording::Screen(_) if !opts.regions.is_empty() => {
                 return Err(crate::recorder::not_supported("--region", "x11"));
@@ -259,10 +266,11 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                     opts.cursor,
                 )?;
                 let ring = opts.border.then(|| viewport.panel());
-                encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
-                (frames, viewport.kind(), Vec::new())
+                let reviewer = encode(&mut source, frames, preset, ring, &ffmpeg, &path)?;
+                (frames, viewport.kind(), Vec::new(), reviewer)
             }
         };
+        let review = reviewer.finish(review::sibling(&path, "sheet.png"), &fonts, advice)?;
         out.push(Export {
             layout: preset.aspect,
             viewport: kind,
@@ -272,12 +280,14 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
             height: preset.height,
             duration: model::round_t(frames as f64 / FPS as f64),
             tightened: tightened.clone(),
+            review,
         });
     }
     Ok(out)
 }
 
-/// Encodes `count` frames of `source`, with the attention border around `ring` if given.
+/// Encodes `count` frames of `source`, with the attention border around `ring` if given, and
+/// returns the reviewer that watched every frame written.
 fn encode(
     source: &mut dyn Frames,
     count: u64,
@@ -285,8 +295,9 @@ fn encode(
     ring: Option<layout::Rect>,
     ffmpeg: &Path,
     path: &Path,
-) -> Result<()> {
+) -> Result<review::Reviewer> {
     let mut enc = Encoder::spawn(ffmpeg, path, preset.width, preset.height)?;
+    let mut reviewer = review::Reviewer::new(preset.width, preset.height, count);
     let ring = ring.map(border::Target::screen);
     let mut canvas = vec![0u8; (preset.width * preset.height * 4) as usize];
     let mut framed = if ring.is_some() {
@@ -299,6 +310,7 @@ fn encode(
         let drawn = source.draw(f, &mut canvas)?;
         let Some(ring) = &ring else {
             enc.write(&canvas)?;
+            reviewer.observe(&canvas, !drawn);
             continue;
         };
         let look = border::look(f as f64 / FPS as f64);
@@ -315,8 +327,10 @@ fn encode(
                 .apply(&mut framed);
         }
         enc.write(&framed)?;
+        reviewer.observe(&framed, !drawn && !new_look);
     }
-    enc.finish()
+    enc.finish()?;
+    Ok(reviewer)
 }
 
 /// The grid that fills `layout` at a legible size in the embedded font, for `--for`.
@@ -348,7 +362,7 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
         })
 }
 
-fn find_ffmpeg() -> Result<PathBuf> {
+pub fn find_ffmpeg() -> Result<PathBuf> {
     find_on_path("ffmpeg").ok_or_else(|| {
         RecError::new(
             "missing_dependency",

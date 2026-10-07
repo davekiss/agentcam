@@ -49,6 +49,32 @@ impl Fonts {
         }
     }
 
+    /// Draws `text` in the regular face at `px` in `fg` onto an RGBA `buf` of `size`, with the
+    /// top of the line at `at`.
+    pub fn text(
+        &self,
+        text: &str,
+        px: f32,
+        fg: Rgb,
+        buf: &mut [u8],
+        size: (u32, u32),
+        at: (i32, i32),
+    ) {
+        let ascent = self
+            .regular
+            .horizontal_line_metrics(px)
+            .expect("horizontal metrics")
+            .ascent;
+        let mut pen = at.0 as f32;
+        for c in text.chars() {
+            let (m, coverage) = self.regular.rasterize(c, px);
+            let x = pen.round() as i32 + m.xmin;
+            let y = at.1 + ascent.round() as i32 - m.height as i32 - m.ymin;
+            blit(buf, size, (x, y), (m.width, &coverage), fg);
+            pen += m.advance_width;
+        }
+    }
+
     fn resolve(&self, c: char, bold: bool) -> Option<Resolved<'_>> {
         let primary = if bold { &self.bold } else { &self.regular };
         std::iter::once(primary)
@@ -70,7 +96,6 @@ struct Glyph {
     x: i32,
     y: i32,
     width: usize,
-    height: usize,
     coverage: Vec<u8>,
 }
 
@@ -227,28 +252,9 @@ impl<'a> Renderer<'a> {
         let Some(g) = &self.glyphs[&key] else {
             return;
         };
-        let x0 = cell.x as i32 + g.x;
-        let y0 = cell.y as i32 + g.y;
-        for gy in 0..g.height {
-            let y = y0 + gy as i32;
-            if y < 0 || y >= self.height as i32 {
-                continue;
-            }
-            for gx in 0..g.width {
-                let x = x0 + gx as i32;
-                if x < 0 || x >= self.width as i32 {
-                    continue;
-                }
-                let a = g.coverage[gy * g.width + gx];
-                if a == 0 {
-                    continue;
-                }
-                let i = (y as usize * self.width as usize + x as usize) * 4;
-                let under = [buf[i], buf[i + 1], buf[i + 2]];
-                let px = mix(under, fg, a as f32 / 255.0);
-                buf[i..i + 3].copy_from_slice(&px);
-            }
-        }
+        let (w, h) = (self.width, self.height);
+        let at = (cell.x as i32 + g.x, cell.y as i32 + g.y);
+        blit(buf, (w, h), at, (g.width, &g.coverage), fg);
     }
 
     /// Primary glyphs sit on the shared baseline as designed. Fallback faces have their own
@@ -269,7 +275,6 @@ impl<'a> Renderer<'a> {
                 x: m.xmin,
                 y: self.baseline - m.height as i32 - m.ymin,
                 width: m.width,
-                height: m.height,
                 coverage,
             });
         }
@@ -285,9 +290,33 @@ impl<'a> Renderer<'a> {
             x: (box_w - w) / 2,
             y: (self.baseline - h - m.ymin).clamp(0, (box_h - h).max(0)),
             width: m.width,
-            height: m.height,
             coverage,
         })
+    }
+}
+
+/// Blends a glyph's `coverage` (`width` columns) in `fg` onto `buf` with its top-left corner at
+/// `at`, clipped to the buffer's `size`.
+fn blit(buf: &mut [u8], size: (u32, u32), at: (i32, i32), glyph: (usize, &[u8]), fg: Rgb) {
+    let (width, coverage) = glyph;
+    if width == 0 {
+        return;
+    }
+    for (gy, row) in coverage.chunks_exact(width).enumerate() {
+        let y = at.1 + gy as i32;
+        if y < 0 || y >= size.1 as i32 {
+            continue;
+        }
+        for (gx, &a) in row.iter().enumerate() {
+            let x = at.0 + gx as i32;
+            if a == 0 || x < 0 || x >= size.0 as i32 {
+                continue;
+            }
+            let i = (y as usize * size.0 as usize + x as usize) * 4;
+            let under = [buf[i], buf[i + 1], buf[i + 2]];
+            let px = mix(under, fg, a as f32 / 255.0);
+            buf[i..i + 3].copy_from_slice(&px);
+        }
     }
 }
 
@@ -360,17 +389,18 @@ mod tests {
                         span,
                     })
                     .expect("resolves");
+                let height = g.coverage.len() / g.width;
                 assert!(g.coverage.iter().any(|&a| a > 0), "{c} has no ink");
                 assert!(
                     g.x >= 0
                         && g.y >= 0
                         && g.x + g.width as i32 <= (fit.cell_w * span) as i32
-                        && g.y + g.height as i32 <= fit.cell_h as i32,
+                        && g.y + height as i32 <= fit.cell_h as i32,
                     "{c} at ({}, {}) {}x{} overflows a {}x{} cell span",
                     g.x,
                     g.y,
                     g.width,
-                    g.height,
+                    height,
                     fit.cell_w * span,
                     fit.cell_h
                 );
