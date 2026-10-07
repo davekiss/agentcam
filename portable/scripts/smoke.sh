@@ -137,6 +137,27 @@ for spec in "16x9 1920 1080" "9x16 1080 1920"; do
   ffmpeg -v error -y -ss "$mark_t" -i "$mp4" -frames:v 1 "$TAKE/frame-$slug.png" || fail "frame extract for $slug"
   [ -s "$TAKE/frame-$slug.png" ] || fail "frame-$slug.png missing"
 done
+check "each export reviews itself with a sheet next to the mp4" \
+  'all(e["review"]["sheet"] == e["path"][:-4] + ".sheet.png" and len(e["review"]["activity"]) > 0 and e["review"]["every"] >= 1 for e in j["exports"])' "$exported"
+check "the smoke take passes review" \
+  'all(c["severity"] != "error" for e in j["exports"] for c in e["review"]["checks"])' "$exported"
+check "the dead air before stop is an idle span" \
+  'all(any(s["to"] - s["from"] >= 3 for s in e["review"]["idle"]) for e in j["exports"])' "$exported"
+for slug in 16x9 9x16; do
+  sheet="$TAKE/export-$slug.sheet.png"
+  python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(b[:8] != b"\x89PNG\r\n\x1a\n" or len(b) < 1000)' "$sheet" ||
+    fail "$sheet is not a PNG"
+  sheet_size=$(ffprobe -v error -show_entries stream=width,height -of csv=p=0 "$sheet")
+  echo "ok: $sheet is a ${sheet_size} PNG" >&2
+done
+reviewed=$(run review "$TAKE/export-9x16.mp4" --at 1)
+check "rec review re-checks an mp4 and writes a still" \
+  '"error" not in j and j["sheet"].endswith("export-9x16.sheet.png") and len(j["frames"]) == 1 and j["frames"][0]["t"] == 1.0' "$reviewed"
+[ "$(ffprobe -v error -show_entries stream=width,height -of csv=p=0 "$TAKE/export-9x16.at-1.png")" = "1080,1920" ] ||
+  fail "rec review --at did not write a full-size still"
+take_review=$(run review "$TAKE")
+check "rec review on a take reviews each export" \
+  '[r["path"].rsplit("/", 1)[1] for r in j["reviews"]] == ["export-16x9.mp4", "export-9x16.mp4"]' "$take_review"
 check "a wide grid fits 16:9 whole and follows the action in 9:16" \
   '[e["viewport"] for e in j["exports"]] == ["fit", "follow"]' "$exported"
 

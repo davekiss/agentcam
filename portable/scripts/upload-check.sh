@@ -40,7 +40,8 @@ PORT=$(cat "$OUT/port")
 [ -n "$PORT" ] || fail "put server did not start"
 BASE="http://127.0.0.1:$PORT"
 
-recorded=$("$REC" record --tty --size 40x10 --duration 2 --out "$OUT" -- sh -c 'echo upload-check; sleep 1' 2>/dev/null) ||
+# Output after the first second, so the export passes review's static check.
+recorded=$("$REC" record --tty --size 40x10 --duration 3 --out "$OUT" -- sh -c 'echo upload-check; sleep 1.5; echo still-here; sleep 1' 2>/dev/null) ||
   fail "record failed: $recorded"
 TAKE_ID=$(printf '%s' "$recorded" | json 'j["id"]')
 TAKE="$OUT/$TAKE_ID"
@@ -91,5 +92,19 @@ check "blob sends the headers @vercel/blob sends" \
 check "blob request id is <store>:<ms>:<hex>" \
   '__import__("re").fullmatch(r"store1:\d{13}:[0-9a-f]+", j["headers"]["x-api-blob-request-id"]) is not None' "$req"
 check "blob sends the whole file" 'j["length"] == '"$size"' and j["headers"]["content-length"] == "'"$size"'"' "$req"
+
+# A take where nothing happens fails review, so --upload sends nothing and keeps the files.
+frozen=$("$REC" record --tty --size 40x10 --duration 3 --out "$OUT" -- sleep 3 2>/dev/null) ||
+  fail "record failed: $frozen"
+FROZEN_ID=$(printf '%s' "$frozen" | json 'j["id"]')
+FROZEN="$OUT/$FROZEN_ID"
+: >"$LOG"
+out=$("$REC" export "$FROZEN" --layout 9:16 --upload "$BASE/up/frozen.mp4?sig=1" 2>/dev/null) &&
+  fail "a video that failed review was uploaded: $out"
+check "a static video is review_failed naming the check and the sheet" \
+  'j["error"]["code"] == "review_failed" and "static" in j["error"]["message"] and "'"$FROZEN_ID"'/export-9x16.sheet.png" in j["error"]["message"]' "$out"
+[ -s "$LOG" ] && fail "review_failed still sent a request"
+[ -s "$FROZEN/export-9x16.mp4" ] && [ -s "$FROZEN/export-9x16.sheet.png" ] || fail "review_failed did not keep the mp4 and sheet"
+echo "ok: nothing uploaded, files kept" >&2
 
 echo "PASS: $OUT"
