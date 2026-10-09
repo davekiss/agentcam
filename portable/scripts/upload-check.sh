@@ -35,7 +35,7 @@ mkdir -p "$OUT"
 : >"$LOG"
 python3 "$here/put_server.py" "$LOG" >"$OUT/port" &
 SERVER=$!
-for _ in $(seq 50); do [ -s "$OUT/port" ] && break; sleep 0.1; done
+for _ in $(seq 300); do [ -s "$OUT/port" ] && break; sleep 0.1; done
 PORT=$(cat "$OUT/port")
 [ -n "$PORT" ] || fail "put server did not start"
 BASE="http://127.0.0.1:$PORT"

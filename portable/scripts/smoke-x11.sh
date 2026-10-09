@@ -97,6 +97,11 @@ outside=$("$AGENTCAM" click 1920 10 2>/dev/null) && fail "a click off the screen
 check "a click off the screen is bad_args" 'j["error"]["code"] == "bad_args"' "$outside"
 notext=$("$AGENTCAM" wait --text foo --timeout 1 2>/dev/null) && fail "wait --text worked on x11"
 check "wait --text is not_supported on x11" 'j["error"]["code"] == "not_supported"' "$notext"
+# Fill the screen with text that differs at every x, so the 9:16 window check below can tell where
+# the window sits even in a terminal that leaves most of the screen blank.
+run type 'seq -s " " 100000 104000' >/dev/null
+run key Return >/dev/null
+run wait --idle 1 --timeout 20 >/dev/null
 run move 1700 900 >/dev/null
 sleep 2
 
