@@ -17,9 +17,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How long a drag holds the button still before moving, as a hand does. Claude Code 2.1 keeps
-/// only the newest of the input events that reach a plugin's surface within a frame, so motion
-/// 15 ms after the press replaced it and the drag extended the old selection.
+/// How long a click or drag holds the button still before it lets go or moves, as a hand does.
+/// Programs fold reports that arrive together. Claude Code 2.1 keeps only the newest input
+/// event of a frame, so motion 15 ms after the press replaced it. ncurses 6 raises a single
+/// KEY_MOUSE for all the reports in one read, so a program that calls getmouse once per
+/// KEY_MOUSE ran a step behind after a press and release sent in one write.
 const PRESS_HOLD: Duration = Duration::from_millis(100);
 
 /// The least time between the input of one command and the next, the default typing delay, so
@@ -209,22 +211,19 @@ impl Tty {
         }
     }
 
-    /// Sends the reports `mouse` gives each action, skipping what the mode leaves out.
+    /// Sends the report `mouse` gives `action`, unless the mode leaves it out. One report per
+    /// write, as a terminal sends each button and motion event on its own.
     fn send_mouse(
         &self,
         mouse: Protocol,
-        actions: &[(Action, (u32, u32))],
+        action: Action,
+        cell: (u32, u32),
         mark: bool,
     ) -> Result<()> {
-        let mut bytes = Vec::new();
-        for &(action, cell) in actions {
-            let cell = (cell.0 as u16, cell.1 as u16);
-            bytes.extend(mouse.report(action, cell)?.unwrap_or_default());
+        match mouse.report(action, (cell.0 as u16, cell.1 as u16))? {
+            Some(bytes) => self.write_input(&bytes, mark),
+            None => Ok(()),
         }
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        self.write_input(&bytes, mark)
     }
 }
 
@@ -260,21 +259,16 @@ impl Capture for Tty {
         }
         let cell = (x, y);
         self.pace();
-        self.send_mouse(
-            mouse,
-            &[
-                (Action::Press(button), cell),
-                (Action::Release(button), cell),
-            ],
-            true,
-        )
+        self.send_mouse(mouse, Action::Press(button), cell, true)?;
+        std::thread::sleep(PRESS_HOLD);
+        self.send_mouse(mouse, Action::Release(button), cell, false)
     }
 
     /// A motion report when the program asked for motion without a button held, and
     /// otherwise nothing, so a script that moves before clicking runs anywhere.
     fn move_to(&self, x: u32, y: u32) -> Result<()> {
         self.pace();
-        self.send_mouse(self.mouse(), &[(Action::Move, (x, y))], true)
+        self.send_mouse(self.mouse(), Action::Move, (x, y), true)
     }
 
     fn drag(&self, path: &[(u32, u32)], button: Button, step: Duration) -> Result<()> {
@@ -284,17 +278,17 @@ impl Capture for Tty {
         }
         let (&first, rest) = path.split_first().expect("a drag has a start");
         self.pace();
-        self.send_mouse(mouse, &[(Action::Press(button), first)], true)?;
+        self.send_mouse(mouse, Action::Press(button), first, true)?;
         std::thread::sleep(PRESS_HOLD);
         for (i, &cell) in rest.iter().enumerate() {
             if i > 0 {
                 std::thread::sleep(step);
             }
-            self.send_mouse(mouse, &[(Action::Drag(button), cell)], false)?;
+            self.send_mouse(mouse, Action::Drag(button), cell, false)?;
         }
         std::thread::sleep(step);
         let last = *path.last().expect("a drag has an end");
-        self.send_mouse(mouse, &[(Action::Release(button), last)], false)
+        self.send_mouse(mouse, Action::Release(button), last, false)
     }
 
     /// Bytes of output so far: it moves exactly when the program writes.
