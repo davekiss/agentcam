@@ -204,9 +204,9 @@ Active state lives in `active.json`, holding `{"pid", "take", "startedAt", "sour
 
 ## Install
 
-On Linux, `agentcam` ships as a single static binary (musl) that runs as a non-root user and installs with one `curl | sh` into `~/.local/bin`. Everything a `tty` take needs, from capture through export, must work with no package installs. The `x11` source may require Xvfb, which `agentcam doctor` reports, and installs when given `--fix` and sudo is available.
+`install.sh` at the repo root downloads the release for the machine (`agentcam-<arch>-<os>.tar.gz`, built for x86_64 and aarch64 Linux as static musl binaries and for both macOS architectures), checks it against its `.sha256`, and installs it into `~/.local/bin` as a non-root user. `AGENTCAM_VERSION` pins a release tag and `AGENTCAM_INSTALL_DIR` picks the directory. Pushing a `v*` tag that matches `portable/Cargo.toml` builds and publishes the release (`.github/workflows/release.yml`).
 
-Encoding: export pipes raw RGBA frames into an encoder. v1 requires an `ffmpeg` on `PATH` and `agentcam doctor --fix` fetches a static build. Linking an H.264 encoder into the binary is the follow-up that removes that step.
+Recording a `tty` take needs nothing else. Export needs `ffmpeg` on `PATH`, and the `x11` source needs `Xvfb`; `agentcam doctor` reports either one missing. Linking an H.264 encoder into the binary is the follow-up that removes the ffmpeg step.
 
 ## Live preview (macOS)
 

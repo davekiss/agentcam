@@ -1,0 +1,14 @@
+{
+  "name": "agentcam",
+  "description": "agentcam: an agent-first screen recorder for terminals and X11 apps.",
+  "owner": {
+    "name": "Dave Kiss"
+  },
+  "plugins": [
+    {
+      "name": "agentcam",
+      "source": "./",
+      "description": "Record, drive, and export demo videos of terminal programs and X11 apps with the agentcam CLI."
+    }
+  ]
+}

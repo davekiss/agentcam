@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: portable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: portable
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb xterm
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - run: scripts/smoke.sh
+      - run: scripts/upload-check.sh
+      - name: x11 smoke
+        if: runner.os == 'Linux'
+        run: APP=xterm scripts/smoke-x11.sh
+      - run: python3 -m unittest scripts/test_jev_tighten.py
+
+  swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build
+      - run: swift test

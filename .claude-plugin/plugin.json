@@ -1,0 +1,9 @@
+{
+  "name": "agentcam",
+  "description": "Record, drive, and export demo videos of terminal programs and X11 apps with the agentcam CLI.",
+  "version": "0.1.0",
+  "author": { "name": "Dave Kiss" },
+  "homepage": "https://github.com/davekiss/agentcam",
+  "repository": "https://github.com/davekiss/agentcam",
+  "license": "MIT"
+}

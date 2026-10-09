@@ -34,12 +34,10 @@ Every command prints one JSON object, so the agent always knows what happened.
 
 ## Get started
 
-Build from source with Rust. On Linux, the musl target gives one static binary:
+Install the binary. It's one static file for Linux (x86_64, arm64) or macOS:
 
 ```sh
-cd portable
-cargo build --release --target x86_64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/agentcam ~/.local/bin/agentcam
+curl -fsSL https://raw.githubusercontent.com/davekiss/agentcam/main/install.sh | sh
 ```
 
 Export needs `ffmpeg`, and the x11 source also needs `Xvfb` (`apt-get install -y ffmpeg xvfb`). Then:
@@ -51,6 +49,26 @@ agentcam wait --idle 1
 agentcam key q
 take=$(agentcam stop | jq -r .id)
 agentcam export "$take" --layout 9:16
+```
+
+### Teach your agent
+
+The agentcam skill tells an agent how to plan a take, drive it, export it, and check the result before handing it over. In Claude Code:
+
+```
+/plugin install agentcam --marketplace davekiss/agentcam
+```
+
+For other agents, point them at [skills/agentcam/SKILL.md](skills/agentcam/SKILL.md) or paste it into your `AGENTS.md`.
+
+### Build from source
+
+With Rust installed. On Linux, the musl target gives one static binary:
+
+```sh
+cd portable
+cargo build --release --target x86_64-unknown-linux-musl
+cp target/x86_64-unknown-linux-musl/release/agentcam ~/.local/bin/agentcam
 ```
 
 ## What it's good at
@@ -162,7 +180,6 @@ Takes go to `~/.local/share/agentcam/` on Linux and `~/Movies/agentcam/` on macO
 - A tty grid is fixed at record time, so record with `--for 9:16` when you want vertical video. A wide take exported to 9:16 crops to a panning window.
 - The x11 pointer is drawn as a standard arrow, not the app's own cursor shape.
 - Only the app agentcam launches is sized to fill the screen. Apps the agent opens later keep their own size.
-- No prebuilt binaries yet. Build from source.
 
 ## The macOS recorder
 
