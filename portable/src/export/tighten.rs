@@ -1,4 +1,4 @@
-//! `rec export --tighten`: retime a take so its pacing follows the app instead of the agent
+//! `agentcam export --tighten`: retime a take so its pacing follows the app instead of the agent
 //! that drove it. The cast and the input log say when the screen changed and why; that splits
 //! the take into typed segments, a policy table gives each segment its length in the output,
 //! and the result is a piecewise-linear map from output time back to take time.
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Something that happened on the take clock.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Point {
-    /// Input `rec` sent. `typed` is the text a `type` sent: it stretches the echo, and the
+    /// Input `agentcam` sent. `typed` is the text a `type` sent: it stretches the echo, and the
     /// viewer watched it appear, so it needs no reading time later. `label` names the input
     /// for a reader of the plan, like `key Return`.
     Input {
@@ -140,7 +140,7 @@ const BURST_GAP: f64 = 0.5;
 const ECHO: f64 = 0.5;
 const ECHO_PER_CHAR: f64 = 0.1;
 
-/// The `col row` a normalized cell center came from, as `rec click` takes it.
+/// The `col row` a normalized cell center came from, as `agentcam click` takes it.
 fn cell(size: Size, x: f64, y: f64) -> String {
     let at = |v: f64, n: u16| ((v * n as f64) as u16).min(n - 1);
     format!("{} {}", at(x, size.cols), at(y, size.rows))
@@ -277,7 +277,7 @@ pub fn segment(points: &[Point], duration: f64) -> Vec<Segment> {
             Point::Input { t, typed, label } => {
                 typed_at.push((*t, typed, label));
                 let chars = typed.chars().count();
-                // `rec` sends inputs one at a time, so a new input ends the echo of the last.
+                // `agentcam` sends inputs one at a time, so a new input ends the echo of the last.
                 echo_until = t + ECHO + ECHO_PER_CHAR * chars as f64;
                 active.push((*t, Role::Input));
             }
@@ -516,7 +516,7 @@ fn spans(seg: &Segment, cut: Cut, next_kept: bool, preroll: f64) -> Vec<((f64, f
     }
 }
 
-/// What tighten did to one segment, as `rec export` reports it.
+/// What tighten did to one segment, as `agentcam export` reports it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Edit {
     pub kind: Kind,

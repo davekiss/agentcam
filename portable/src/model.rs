@@ -62,7 +62,7 @@ impl TryFrom<Dims> for Size {
     }
 }
 
-/// An x11 screen. Always at the origin: `rec` owns the whole virtual display.
+/// An x11 screen. Always at the origin: `agentcam` owns the whole virtual display.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Frame {
     pub x: u32,
@@ -102,7 +102,7 @@ pub enum Source {
         size: Size,
     },
     X11 {
-        /// The app `rec` launched into the display, if any.
+        /// The app `agentcam` launched into the display, if any.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         command: Vec<String>,
         frame: Frame,

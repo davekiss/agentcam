@@ -45,7 +45,7 @@ pub enum Request {
     },
     /// A value that changes whenever the recorded screen or output does.
     Fingerprint,
-    /// Plain-text output written since the last input `rec` sent.
+    /// Plain-text output written since the last input `agentcam` sent.
     Output,
     Mark {
         label: String,

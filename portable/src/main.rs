@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 /// A screen recorder for agents. Every command prints one JSON object on stdout.
 #[derive(Parser)]
-#[command(name = "rec", version)]
+#[command(name = "agentcam", version)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -175,7 +175,7 @@ struct RecordArgs {
     /// Folder that take folders are created in.
     #[arg(long)]
     out: Option<PathBuf>,
-    /// Record into this existing folder (used by `rec start`).
+    /// Record into this existing folder (used by `agentcam start`).
     #[arg(long, hide = true)]
     take_dir: Option<PathBuf>,
     #[arg(last = true)]
@@ -209,7 +209,7 @@ impl RecordArgs {
     }
 }
 
-/// The `rec record` flags that reproduce `source`, for `rec start` to hand to its recorder.
+/// The `agentcam record` flags that reproduce `source`, for `agentcam start` to hand to its recorder.
 fn record_flags(source: &Source) -> Vec<String> {
     let (kind, size, command) = match source {
         Source::Tty { command, size } => ("--tty", format!("{}x{}", size.cols, size.rows), command),
@@ -369,7 +369,7 @@ fn start(args: RecordArgs) -> Result<Value> {
         .try_clone()
         .map_err(|e| RecError::io("recorder.log", e))?;
 
-    let exe = std::env::current_exe().map_err(|e| RecError::io("locate rec binary", e))?;
+    let exe = std::env::current_exe().map_err(|e| RecError::io("locate agentcam binary", e))?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("record").arg("--take-dir").arg(&dir);
     if let Some(d) = args.duration {
@@ -685,7 +685,7 @@ fn refuse_failed_reviews(exports: &[export::Export]) -> Result<()> {
     ))
 }
 
-/// `rec review`: one MP4, or every export in a take.
+/// `agentcam review`: one MP4, or every export in a take.
 fn review(target: &str, at: &[f64]) -> Result<Value> {
     let file = PathBuf::from(target);
     if file.is_file() {
@@ -706,7 +706,7 @@ fn review(target: &str, at: &[f64]) -> Result<Value> {
         return Err(RecError::new(
             "not_found",
             format!(
-                "{} has no export-*.mp4; run rec export first",
+                "{} has no export-*.mp4; run agentcam export first",
                 dir.display()
             ),
         ));

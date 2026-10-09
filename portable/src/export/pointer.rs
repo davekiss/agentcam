@@ -25,7 +25,7 @@ pub struct Timing {
     pub hold: f64,
     /// How long it takes to disappear after the hold.
     pub fade_out: f64,
-    /// A move from rest (a `rec move` or `rec click` jumps in one step) is drawn as a glide
+    /// A move from rest (a `agentcam move` or `agentcam click` jumps in one step) is drawn as a glide
     /// this long that arrives when the pointer did. Continuous motion is interpolated between
     /// samples instead.
     pub glide: f64,

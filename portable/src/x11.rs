@@ -1,4 +1,4 @@
-//! The x11 capture: a virtual display (Xvfb) `rec` owns, filmed with ffmpeg's x11grab, driven
+//! The x11 capture: a virtual display (Xvfb) `agentcam` owns, filmed with ffmpeg's x11grab, driven
 //! with XTEST, and read back with GetImage. The recorder owns three children, Xvfb, ffmpeg and
 //! the optional app, and `Children` guarantees all three are gone however the take ends.
 
@@ -393,12 +393,12 @@ pub fn start(dir: &Path, command: &[String], frame: Frame) -> Result<Started> {
                 .stderr(Stdio::inherit()),
             program,
         )?);
-        // Input sent before the app has a window goes nowhere, so `rec start` waits for one.
+        // Input sent before the app has a window goes nowhere, so `agentcam start` waits for one.
         // There is no window manager, so the window opens at its default size in the corner;
         // the screen exists for this app, so it fills it.
         match x.wait_for_window(Duration::from_secs(10))? {
             Some(w) => x.fill(w)?,
-            None => eprintln!("rec: {program} mapped no window within 10s; recording anyway"),
+            None => eprintln!("agentcam: {program} mapped no window within 10s; recording anyway"),
         }
     }
 

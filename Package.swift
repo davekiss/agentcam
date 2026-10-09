@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "rec",
+    name: "agentcam",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "rec", targets: ["rec"]),
+        .executable(name: "agentcam-mac", targets: ["agentcam-mac"]),
         .library(name: "RecKit", targets: ["RecKit"]),
     ],
     dependencies: [
@@ -17,7 +17,7 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "rec",
+            name: "agentcam-mac",
             dependencies: [
                 "RecKit",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),

@@ -1,4 +1,4 @@
-//! `rec export`: compose a take's frames at 30 fps into each layout and encode with ffmpeg.
+//! `agentcam export`: compose a take's frames at 30 fps into each layout and encode with ffmpeg.
 //! A tty take replays term.cast through vt100; an x11 take decodes screen.mp4.
 
 mod border;
@@ -218,7 +218,7 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                     opts.font_px,
                 )?;
                 eprintln!(
-                    "rec: exporting {} ({frames} frames, {}px font, {} viewport)",
+                    "agentcam: exporting {} ({frames} frames, {}px font, {} viewport)",
                     path.display(),
                     viewport.font_px(),
                     viewport.kind()
@@ -253,7 +253,7 @@ pub fn export(dir: &Path, opts: &ExportOptions) -> Result<Vec<Export>> {
                 let frames = take.frames(duration);
                 let viewport = layout::screen_viewport(preset, take.width, take.height);
                 eprintln!(
-                    "rec: exporting {} ({frames} frames, {} viewport)",
+                    "agentcam: exporting {} ({frames} frames, {} viewport)",
                     path.display(),
                     viewport.kind()
                 );

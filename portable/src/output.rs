@@ -1,4 +1,4 @@
-//! The program's output as plain text, for `rec wait --new`.
+//! The program's output as plain text, for `agentcam wait --new`.
 
 /// The newest output with escape sequences removed, keeping at most `cap` bytes. A cursor is
 /// a byte offset into everything ever written, so it stays valid as old text is dropped.

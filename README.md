@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo.png" alt="rec" width="160">
+  <img src="assets/logo.png" alt="agentcam" width="160">
 </p>
 
-<h1 align="center">rec</h1>
+<h1 align="center">agentcam</h1>
 
 <p align="center"><b>Your agent films its own demo.</b></p>
 
@@ -21,14 +21,14 @@
 <p align="center">
   <img src="assets/demo.gif" alt="A vertical recording of Ghostty: an echo, a colored ls, htop opening and closing, a mouse click with a ripple, then uname printing Linux 6.18" width="300">
   <br>
-  <sub>Ghostty in a Vercel Sandbox, typed, clicked and filmed by <code>rec</code>. The pointer only shows up for the click.</sub>
+  <sub>Ghostty in a Vercel Sandbox, typed, clicked and filmed by <code>agentcam</code>. The pointer only shows up for the click.</sub>
 </p>
 
 ---
 
 Your agent just built a TUI, a Claude Code mod, or a CLI, and now someone needs to see it. So you open a screen recorder, run the thing yourself, fumble a keystroke, trim the dead air in an editor, and crop it to vertical for social. Meanwhile the agent that built it is running in a Firecracker VM with no screen, no GPU, and no way to show you anything but text.
 
-With rec, the agent records it. It starts the program inside a terminal or virtual display that rec owns, types and clicks through the demo, waits for the screen instead of guessing sleeps, and stops. Then `rec export --layout 9:16 --tighten --upload blob` cuts the pauses, fills the vertical frame, and hands back a URL before the VM disappears.
+With agentcam, the agent records it. It starts the program inside a terminal or virtual display that agentcam owns, types and clicks through the demo, waits for the screen instead of guessing sleeps, and stops. Then `agentcam export --layout 9:16 --tighten --upload blob` cuts the pauses, fills the vertical frame, and hands back a URL before the VM disappears.
 
 Every command prints one JSON object, so the agent always knows what happened.
 
@@ -39,28 +39,28 @@ Build from source with Rust. On Linux, the musl target gives one static binary:
 ```sh
 cd portable
 cargo build --release --target x86_64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/rec ~/.local/bin/rec
+cp target/x86_64-unknown-linux-musl/release/agentcam ~/.local/bin/agentcam
 ```
 
 Export needs `ffmpeg`, and the x11 source also needs `Xvfb` (`apt-get install -y ffmpeg xvfb`). Then:
 
 ```sh
-rec doctor                                # what's available, what's missing
-rec start --tty --for 9:16 -- htop
-rec wait --idle 1
-rec key q
-take=$(rec stop | jq -r .id)
-rec export "$take" --layout 9:16
+agentcam doctor                                # what's available, what's missing
+agentcam start --tty --for 9:16 -- htop
+agentcam wait --idle 1
+agentcam key q
+take=$(agentcam stop | jq -r .id)
+agentcam export "$take" --layout 9:16
 ```
 
 ## What it's good at
 
 ### It records terminals without a screen
 
-The `tty` source runs the program in a pseudo-terminal that rec owns and records its output stream with timestamps, in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/). No display, no GPU, and almost no CPU: a short shell session with an `ls` comes to about 1.4 KB. Export replays the stream through a terminal emulator and draws it in JetBrains Mono, with fallback fonts for symbols, box drawing and braille spinners.
+The `tty` source runs the program in a pseudo-terminal that agentcam owns and records its output stream with timestamps, in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/). No display, no GPU, and almost no CPU: a short shell session with an `ls` comes to about 1.4 KB. Export replays the stream through a terminal emulator and draws it in JetBrains Mono, with fallback fonts for symbols, box drawing and braille spinners.
 
 ```sh
-rec start --tty --for 9:16 -- claude
+agentcam start --tty --for 9:16 -- claude
 ```
 
 > *"Record a demo of the herdr pane layout."* · *"Film the `/auto-mode-setup` flow, vertical."* · *"Make a 20-second clip of the CLI's --help and one real run."*
@@ -70,24 +70,24 @@ rec start --tty --for 9:16 -- claude
 The `x11` source starts Xvfb, launches your app on it, sizes the window to fill the screen (there's no window manager), and captures with ffmpeg. Anything that draws to X11 works; it's tested with Ghostty, xterm and xmessage. On a 4-vCPU Vercel Sandbox, capture costs about 80% of one core for ffmpeg and 5% for Xvfb.
 
 ```sh
-rec start --x11 --for 9:16 -- ghostty --font-size=26
+agentcam start --x11 --for 9:16 -- ghostty --font-size=26
 ```
 
 ### It drives what it records
 
-The agent works the program through rec, and every input lands in `timeline.json` with its exact time:
+The agent works the program through agentcam, and every input lands in `timeline.json` with its exact time:
 
 ```sh
-rec type 'echo hello'          # human-paced typing; works for é and ✔ on x11 too
-rec key ctrl+c
-rec click 500 900              # x11
-rec wait --text 'Looks good'   # block until the screen matches
-rec wait --new --text 'ok'     # match only output since the last input
-rec wait --idle 1              # block until the screen settles
-rec screen                     # what's on screen now, as text (tty) or PNG (x11)
+agentcam type 'echo hello'          # human-paced typing; works for é and ✔ on x11 too
+agentcam key ctrl+c
+agentcam click 500 900              # x11
+agentcam wait --text 'Looks good'   # block until the screen matches
+agentcam wait --new --text 'ok'     # match only output since the last input
+agentcam wait --idle 1              # block until the screen settles
+agentcam screen                     # what's on screen now, as text (tty) or PNG (x11)
 ```
 
-`rec wait` replaces guessed sleeps, so a take paces itself on the app instead of on the agent's think time.
+`agentcam wait` replaces guessed sleeps, so a take paces itself on the app instead of on the agent's think time.
 
 ### It fills a vertical frame
 
@@ -100,9 +100,9 @@ rec screen                     # what's on screen now, as text (tty) or PNG (x11
 For judgment calls, `portable/scripts/jev_tighten.py` edits the cut with [TypeSafe](https://typesafe.ai) Jev: important screens hold longer, boilerplate gets less, and mistakes that were undone are cut. In blind tests against three editor models, on takes it wasn't tuned on, it landed 38% closer to the editors' hold times than plain tighten, for about $0.0005 a take.
 
 ```sh
-rec export <take> --tighten --plan-out plan.json
+agentcam export <take> --tighten --plan-out plan.json
 python3 portable/scripts/jev_tighten.py plan.json --purpose "Setting up auto mode" --out plan.jev.json
-rec export <take> --layout 9:16 --plan plan.jev.json
+agentcam export <take> --layout 9:16 --plan plan.jev.json
 ```
 
 ### It shows the pointer only when it matters
@@ -114,7 +114,7 @@ The x11 recording has no pointer baked in. Pointer positions and clicks go into 
 Every export reviews itself. The JSON says how much changed each second, where nothing moved, and whether the video is blank or frozen, and a contact sheet lands next to the MP4 with a labelled frame every second or so. The agent can look at one PNG instead of trusting a file it never watched. A video that fails review is never uploaded: `--upload` refuses with `review_failed` and names the sheet to look at.
 
 ```sh
-rec review export-9x16.mp4 --at 12   # check any MP4 again, and pull the frame at 12s
+agentcam review export-9x16.mp4 --at 12   # check any MP4 again, and pull the frame at 12s
 ```
 
 ### It delivers before the VM disappears
@@ -127,16 +127,16 @@ rec review export-9x16.mp4 --at 12   # check any MP4 again, and pull the frame a
 
 | Command | What it does |
 | --- | --- |
-| `rec start --tty [--size CxR \| --for 9:16] -- cmd` | Run `cmd` in a recorded terminal; returns once recording |
-| `rec start --x11 [--size WxH \| --for 9:16] [-- cmd]` | Start a virtual display, launch `cmd` on it, record; returns the display |
-| `rec type` / `key` / `click` / `move` | Drive the program; each input is logged with its time |
-| `rec wait --text RE [--new]` / `--idle S` | Block until the screen matches, or settles |
-| `rec screen [--png PATH]` | What's on screen now |
-| `rec mark LABEL` | Drop a marker on the take clock |
-| `rec status` / `stop` | Check on the take, or finish it and print take.json |
-| `rec export TAKE` | Compose 16:9 and 9:16 MP4s, each reviewed with a contact sheet; `--tighten`, `--plan`, `--border`, `--cursor`, `--upload` |
-| `rec review FILE.mp4 \| TAKE [--at T]` | Review an MP4 again: activity, idle spans, checks, a contact sheet, and stills |
-| `rec doctor` / `sources` | What this machine can record, and what's missing |
+| `agentcam start --tty [--size CxR \| --for 9:16] -- cmd` | Run `cmd` in a recorded terminal; returns once recording |
+| `agentcam start --x11 [--size WxH \| --for 9:16] [-- cmd]` | Start a virtual display, launch `cmd` on it, record; returns the display |
+| `agentcam type` / `key` / `click` / `move` | Drive the program; each input is logged with its time |
+| `agentcam wait --text RE [--new]` / `--idle S` | Block until the screen matches, or settles |
+| `agentcam screen [--png PATH]` | What's on screen now |
+| `agentcam mark LABEL` | Drop a marker on the take clock |
+| `agentcam status` / `stop` | Check on the take, or finish it and print take.json |
+| `agentcam export TAKE` | Compose 16:9 and 9:16 MP4s, each reviewed with a contact sheet; `--tighten`, `--plan`, `--border`, `--cursor`, `--upload` |
+| `agentcam review FILE.mp4 \| TAKE [--at T]` | Review an MP4 again: activity, idle spans, checks, a contact sheet, and stills |
+| `agentcam doctor` / `sources` | What this machine can record, and what's missing |
 
 Failures print `{"error": {"code", "message"}}` and exit nonzero. [SPEC.md](SPEC.md) has every flag and JSON shape.
 
@@ -149,19 +149,19 @@ screen.mp4       x11: H.264 capture, no pointer
 timeline.json    typed text, keys, clicks, pointer samples, markers
 markers.jsonl    markers added while recording
 recorder.log     the background recorder's output
-export-16x9.mp4  written by rec export
+export-16x9.mp4  written by agentcam export
 export-9x16.mp4
 export-9x16.sheet.png  the export's contact sheet, one frame every second or so
 ```
 
-Takes go to `~/.local/share/rec/` on Linux and `~/Movies/rec/` on macOS unless `--out` says otherwise. Recording and composing are separate, so one take exports to every layout, and an agent can fix sync or timing by editing the JSON.
+Takes go to `~/.local/share/agentcam/` on Linux and `~/Movies/agentcam/` on macOS unless `--out` says otherwise. Recording and composing are separate, so one take exports to every layout, and an agent can fix sync or timing by editing the JSON.
 
 ## Limits
 
-- `--tighten` and `rec wait --text` work on tty takes only. x11 needs pixel-diff tightening and OCR, which aren't built yet.
+- `--tighten` and `agentcam wait --text` work on tty takes only. x11 needs pixel-diff tightening and OCR, which aren't built yet.
 - A tty grid is fixed at record time, so record with `--for 9:16` when you want vertical video. A wide take exported to 9:16 crops to a panning window.
 - The x11 pointer is drawn as a standard arrow, not the app's own cursor shape.
-- Only the app rec launches is sized to fill the screen. Apps the agent opens later keep their own size.
+- Only the app agentcam launches is sized to fill the screen. Apps the agent opens later keep their own size.
 - No prebuilt binaries yet. Build from source.
 
 ## The macOS recorder
@@ -170,8 +170,8 @@ Takes go to `~/.local/share/rec/` on Linux and `~/Movies/rec/` on macOS unless `
 
 ```sh
 swift build -c release
-.build/release/rec start --app "Google Chrome"
-.build/release/rec stop
+.build/release/agentcam-mac start --app "Google Chrome"
+.build/release/agentcam-mac stop
 ```
 
 It needs macOS 14 and Xcode 16, plus Screen Recording, Camera and Microphone permission for your terminal. The portable recorder's tty source also runs on macOS.

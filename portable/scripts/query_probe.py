@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Asks the terminal it runs in the startup queries Claude Code sends, plus DSR, then prints each
-reply as escaped text, one per line, so `rec wait --text` can check them on the screen."""
+reply as escaped text, one per line, so `agentcam wait --text` can check them on the screen."""
 import os
 import select
 import sys

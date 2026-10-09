@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turns on mouse reporting and prints what arrives, newest last, so `rec screen` can check
+"""Turns on mouse reporting and prints what arrives, newest last, so `agentcam screen` can check
 which events reached the program at which cells. Exits on q.
 
   mouse_probe.py          curses with ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION; prints

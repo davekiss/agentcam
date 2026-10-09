@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end check of the x11 source: Xvfb + Ghostty, XTEST input, screenshots, stop, export.
-# Linux only. Needs: a built rec (REC=path, default target/release/rec), Xvfb, ffmpeg, ffprobe,
+# Linux only. Needs: a built agentcam (AGENTCAM=path, default target/release/agentcam), Xvfb, ffmpeg, ffprobe,
 # python3, and ghostty (APP to use another terminal that runs bash).
 set -euo pipefail
 
@@ -10,9 +10,9 @@ if [ "$(uname -s)" != Linux ]; then
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)
-REC=${REC:-$here/../target/release/rec}
+AGENTCAM=${AGENTCAM:-$here/../target/release/agentcam}
 APP=${APP:-ghostty}
-OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/rec-smoke-x11.XXXXXX")}
+OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/agentcam-smoke-x11.XXXXXX")}
 TAKE=""
 
 fail() {
@@ -21,14 +21,14 @@ fail() {
     echo "--- recorder.log" >&2
     grep -v '^ffmpeg: ' "$TAKE/recorder.log" | tail -20 >&2
   fi
-  "$REC" stop >/dev/null 2>&1 || true
+  "$AGENTCAM" stop >/dev/null 2>&1 || true
   exit 1
 }
 
 run() {
-  echo "+ rec $*" >&2
+  echo "+ agentcam $*" >&2
   local out
-  out=$("$REC" "$@" 2>/dev/null) || fail "rec $1 exited nonzero: $out"
+  out=$("$AGENTCAM" "$@" 2>/dev/null) || fail "agentcam $1 exited nonzero: $out"
   echo "$out" >&2
   printf '%s' "$out"
 }
@@ -51,7 +51,7 @@ rgb() {
 for tool in Xvfb ffmpeg ffprobe python3 "$APP"; do
   command -v "$tool" >/dev/null || fail "$tool not on PATH"
 done
-[ -x "$REC" ] || fail "rec binary not found at $REC (cargo build --release)"
+[ -x "$AGENTCAM" ] || fail "agentcam binary not found at $AGENTCAM (cargo build --release)"
 
 check "doctor reports x11 ready" 'j["sources"]["x11"]["ok"] is True' "$(run doctor)"
 check "sources lists x11" 'j["x11"] is True' "$(run sources)"
@@ -93,14 +93,14 @@ echo "ok: ctrl+c reached the shell" >&2
 
 clicked=$(run click 960 540)
 check "click returns its time" 'j["t"] > 0' "$clicked"
-outside=$("$REC" click 1920 10 2>/dev/null) && fail "a click off the screen succeeded"
+outside=$("$AGENTCAM" click 1920 10 2>/dev/null) && fail "a click off the screen succeeded"
 check "a click off the screen is bad_args" 'j["error"]["code"] == "bad_args"' "$outside"
-notext=$("$REC" wait --text foo --timeout 1 2>/dev/null) && fail "wait --text worked on x11"
+notext=$("$AGENTCAM" wait --text foo --timeout 1 2>/dev/null) && fail "wait --text worked on x11"
 check "wait --text is not_supported on x11" 'j["error"]["code"] == "not_supported"' "$notext"
 run move 1700 900 >/dev/null
 sleep 2
 
-ps -eo pid=,comm= | awk '$2 ~ /^(Xvfb|ffmpeg|rec|'"$APP"')$/ {print $1}' >"$OUT/pids"
+ps -eo pid=,comm= | awk '$2 ~ /^(Xvfb|ffmpeg|agentcam|'"$APP"')$/ {print $1}' >"$OUT/pids"
 cpu=$(python3 - "$OUT/pids" <<'EOF'
 import os, sys, time
 pids = [p.strip() for p in open(sys.argv[1]) if p.strip()]
@@ -148,7 +148,7 @@ check "timeline opens with where the pointer starts, the middle of the screen" \
   '[(e["t"] < 0.1, e["x"], e["y"]) for e in j["events"] if e["type"] == "cursor"][0] == (True, 0.5, 0.5)' "$timeline"
 check "timeline is in time order" '[e["t"] for e in j["events"]] == sorted(e["t"] for e in j["events"])' "$timeline"
 
-tight=$("$REC" export "$TAKE" --tighten 2>/dev/null) && fail "--tighten worked on x11"
+tight=$("$AGENTCAM" export "$TAKE" --tighten 2>/dev/null) && fail "--tighten worked on x11"
 check "--tighten is not_supported on x11" 'j["error"]["code"] == "not_supported"' "$tight"
 
 exported=$(run export "$TAKE")

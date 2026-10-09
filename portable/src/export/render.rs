@@ -263,7 +263,7 @@ impl<'a> Renderer<'a> {
     fn place(&self, key: GlyphKey) -> Option<Glyph> {
         let Some(r) = self.fonts.resolve(key.c, key.bold) else {
             eprintln!(
-                "rec: no embedded font has {:?} (U+{:04X}); drawing it blank",
+                "agentcam: no embedded font has {:?} (U+{:04X}); drawing it blank",
                 key.c, key.c as u32
             );
             return None;

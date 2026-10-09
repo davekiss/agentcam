@@ -17,7 +17,7 @@ final class VideoTrackWriter: @unchecked Sendable {
 
     init(url: URL, label: String) {
         self.url = url
-        self.queue = DispatchQueue(label: "rec.writer.\(label)")
+        self.queue = DispatchQueue(label: "agentcam.writer.\(label)")
     }
 
     /// `hostTime` is the sample's presentation time on the host clock.

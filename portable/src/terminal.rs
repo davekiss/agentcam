@@ -1,4 +1,4 @@
-//! What `rec` answers as the terminal a tty program runs in: replies to the queries a program
+//! What `agentcam` answers as the terminal a tty program runs in: replies to the queries a program
 //! writes to find out what it is talking to, and the kitty keyboard flags it pushes. It hooks
 //! the vt100 emulator, so a query split across reads, or written mid-frame, is seen in order with
 //! the screen state it asks about.
@@ -148,7 +148,7 @@ impl Terminal {
             Query::PrimaryAttributes => b"\x1b[?62;22c".to_vec(),
             Query::SecondaryAttributes => b"\x1b[>1;10;0c".to_vec(),
             Query::Version => {
-                format!("\x1bP>|rec {}\x1b\\", env!("CARGO_PKG_VERSION")).into_bytes()
+                format!("\x1bP>|agentcam {}\x1b\\", env!("CARGO_PKG_VERSION")).into_bytes()
             }
             Query::Status => b"\x1b[0n".to_vec(),
             Query::CursorPosition { dec } => {
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn each_query_gets_its_reply() {
-        let version = format!("\x1bP>|rec {}\x1b\\", env!("CARGO_PKG_VERSION"));
+        let version = format!("\x1bP>|agentcam {}\x1b\\", env!("CARGO_PKG_VERSION"));
         let cases: &[(&[u8], &[u8])] = &[
             (b"\x1b[c", b"\x1b[?62;22c"),
             (b"\x1b[0c", b"\x1b[?62;22c"),
@@ -276,7 +276,7 @@ mod tests {
     fn a_query_split_across_reads_is_answered_once_whole() {
         let mut p = parser();
         let got = replies(&mut p, &[b"ab\x1b", b"[", b"?", b"u", b"\x1b[>", b"0q"]);
-        let want = format!("\x1b[?0u\x1bP>|rec {}\x1b\\", env!("CARGO_PKG_VERSION"));
+        let want = format!("\x1b[?0u\x1bP>|agentcam {}\x1b\\", env!("CARGO_PKG_VERSION"));
         assert_eq!(String::from_utf8_lossy(&got), want);
     }
 
@@ -292,7 +292,7 @@ mod tests {
         // Claude Code's startup probe: DA1, the kitty query twice, and XTVERSION.
         let got = replies(&mut parser(), &[b"\x1b[?u\x1b[c\x1b[?u\x1b[>0q"]);
         let want = format!(
-            "\x1b[?0u\x1b[?62;22c\x1b[?0u\x1bP>|rec {}\x1b\\",
+            "\x1b[?0u\x1b[?62;22c\x1b[?0u\x1bP>|agentcam {}\x1b\\",
             env!("CARGO_PKG_VERSION")
         );
         assert_eq!(String::from_utf8_lossy(&got), want);

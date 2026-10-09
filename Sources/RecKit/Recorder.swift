@@ -30,7 +30,7 @@ enum RecorderState {
     case failed(CommandError)
 }
 
-/// The foreground recorder behind `rec record`. Owns the whole lifecycle of one take and exits
+/// The foreground recorder behind `agentcam-mac record`. Owns the whole lifecycle of one take and exits
 /// the process when the take is finished or failed. Runs on the main thread inside NSApplication.
 @MainActor
 public final class Recorder {
@@ -73,7 +73,7 @@ public final class Recorder {
         state = .starting
 
         if let active = ActiveStore.current(), active.pid != pid {
-            throw CommandError(.alreadyRecording, "already recording \(active.take) (pid \(active.pid)); run `rec stop` first")
+            throw CommandError(.alreadyRecording, "already recording \(active.take) (pid \(active.pid)); run `agentcam-mac stop` first")
         }
         var content = try await SourceCatalog.shareableContent()
         let resolved = try await SourceCatalog.resolve(options.selector, in: content)

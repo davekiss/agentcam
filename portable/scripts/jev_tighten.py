@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Edit a `rec export --tighten --plan-out` plan with TypeSafe Jev judgments.
+"""Edit a `agentcam export --tighten --plan-out` plan with TypeSafe Jev judgments.
 
 For each settled or end screen, one request asks two independent questions:
   read_need   (Score) how much of the newly appeared text a viewer of this demo needs to read
@@ -46,7 +46,7 @@ HOLD_TABLE = [
     (2.0, 0.20, 6.0),  # 3 a choice the viewer should notice
     (4.0, 0.25, 10.0),  # 4 the payoff
 ]
-END_MIN = 2.0  # The final screen holds at least this long, as in rec's policy.
+END_MIN = 2.0  # The final screen holds at least this long, as in agentcam's policy.
 UNDO_THRESHOLD = 0.8
 HOLD_SCALE = 0.8  # Multiplies every non-end hold; 0.8 beat 1.0 on held-out takes. End screens keep the END_MIN floor unscaled.
 
@@ -204,7 +204,7 @@ def apply_policy(plan, answers, restore_rule=True, hold_scale=HOLD_SCALE):
     A screen flagged as undone drops everything after the screen before the mistake, up to the
     screen after the undo. With `restore_rule`, the screen after the undo is dropped too when it
     is a settled screen that only restores the screen before the mistake, so the video cuts from
-    the pre-mistake screen to the next real input, whose preroll rec keeps.
+    the pre-mistake screen to the next real input, whose preroll agentcam keeps.
     """
     by_id = {s["id"]: s for s in plan["segments"]}
     ids = [s["id"] for s in plan["segments"]]

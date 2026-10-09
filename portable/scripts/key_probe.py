@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pushes kitty keyboard flags (argv[1], default 1) and prints each read that arrives as escaped
-text, `key <bytes>`, so `rec screen` can check what a key became. Pops the flags and exits on q."""
+text, `key <bytes>`, so `agentcam screen` can check what a key became. Pops the flags and exits on q."""
 import os
 import sys
 import termios

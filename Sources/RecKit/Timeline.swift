@@ -98,7 +98,7 @@ public struct Timeline: Codable, Equatable, Sendable {
     }
 }
 
-/// One line of markers.jsonl, appended by `rec mark` while recording. `t` is on the take clock.
+/// One line of markers.jsonl, appended by `agentcam-mac mark` while recording. `t` is on the take clock.
 public struct MarkerLine: Codable, Equatable, Sendable {
     public var t: Double
     public var label: String

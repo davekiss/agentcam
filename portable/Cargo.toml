@@ -1,10 +1,10 @@
 [package]
-name = "rec"
+name = "agentcam"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "rec"
+name = "agentcam"
 path = "src/main.rs"
 
 [dependencies]

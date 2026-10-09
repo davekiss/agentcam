@@ -1,6 +1,6 @@
 //! Every export reviews itself as it encodes: how much of the picture changes each second,
 //! where nothing moves, whether it is blank or frozen, and a contact sheet to look at.
-//! `rec review` runs the same reviewer over an MP4 decoded by ffmpeg.
+//! `agentcam review` runs the same reviewer over an MP4 decoded by ffmpeg.
 
 use super::render::Fonts;
 use super::theme::Rgb;
@@ -202,7 +202,7 @@ impl Reviewer {
     }
 
     /// Pixels that differ from both of the last two distinct pictures, so a cursor blinking
-    /// between two pictures, as `rec wait --idle` also allows, is no change.
+    /// between two pictures, as `agentcam wait --idle` also allows, is no change.
     fn change(&mut self, frame: &[u8]) -> u64 {
         let n = changed(&self.prev, frame, self.width);
         if n == 0 {
@@ -506,14 +506,14 @@ pub fn write_png(path: &Path, rgba: &[u8], size: (u32, u32)) -> Result<()> {
         .map_err(err)
 }
 
-/// A frame `rec review --at` wrote at full size.
+/// A frame `agentcam review --at` wrote at full size.
 #[derive(Debug, Serialize)]
 pub struct Still {
     pub t: f64,
     pub png: PathBuf,
 }
 
-/// `rec review FILE.mp4`: the review of an existing video, plus any stills asked for.
+/// `agentcam review FILE.mp4`: the review of an existing video, plus any stills asked for.
 #[derive(Debug, Serialize)]
 pub struct FileReview {
     pub path: PathBuf,
@@ -670,7 +670,7 @@ mod tests {
             r.observe(f, false);
         }
         let sheet = std::env::temp_dir().join(format!(
-            "rec-review-{name}-{}.sheet.png",
+            "agentcam-review-{name}-{}.sheet.png",
             std::process::id()
         ));
         r.finish(sheet, &Fonts::load(), advice).unwrap()

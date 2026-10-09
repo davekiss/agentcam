@@ -1,4 +1,4 @@
-//! The tty capture: a command in a PTY `rec` owns, its output streamed to term.cast.
+//! The tty capture: a command in a PTY `agentcam` owns, its output streamed to term.cast.
 
 use crate::cast::{CastWriter, Header, Utf8Buffer};
 use crate::error::{RecError, Result};
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 const PRESS_HOLD: Duration = Duration::from_millis(100);
 
 /// The least time between the input of one command and the next, the default typing delay, so
-/// `rec type` then `rec key Return` does not land both in one frame of the program.
+/// `agentcam type` then `agentcam key Return` does not land both in one frame of the program.
 const INPUT_GAP: Duration = Duration::from_millis(40);
 
 /// What the reader thread writes: the emulated screen and the plain-text output.
@@ -60,7 +60,7 @@ pub fn start(dir: &Path, command: &[String], size: Size, tx: Sender<Msg>) -> Res
     let mut cmd = CommandBuilder::new(program);
     cmd.args(args);
     cmd.env("TERM", "xterm-256color");
-    // portable-pty defaults to $HOME when no cwd is given; run where the user ran rec.
+    // portable-pty defaults to $HOME when no cwd is given; run where the user ran agentcam.
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end check of the tty source: record, drive, observe, stop, export, verify the MP4s.
-# Needs: a built rec (REC=path, default target/release/rec), ffmpeg, ffprobe, python3.
+# Needs: a built agentcam (AGENTCAM=path, default target/release/agentcam), ffmpeg, ffprobe, python3.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-REC=${REC:-$here/../target/release/rec}
-OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/rec-smoke.XXXXXX")}
+AGENTCAM=${AGENTCAM:-$here/../target/release/agentcam}
+OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/agentcam-smoke.XXXXXX")}
 TAKE=""
 export BASH_SILENCE_DEPRECATION_WARNING=1
 
@@ -15,14 +15,14 @@ fail() {
     echo "--- recorder.log" >&2
     tail -20 "$TAKE/recorder.log" >&2
   fi
-  "$REC" stop >/dev/null 2>&1 || true
+  "$AGENTCAM" stop >/dev/null 2>&1 || true
   exit 1
 }
 
 run() {
-  echo "+ rec $*" >&2
+  echo "+ agentcam $*" >&2
   local out
-  out=$("$REC" "$@" 2>/dev/null) || fail "rec $1 exited nonzero: $out"
+  out=$("$AGENTCAM" "$@" 2>/dev/null) || fail "agentcam $1 exited nonzero: $out"
   echo "$out" >&2
   printf '%s' "$out"
 }
@@ -41,7 +41,7 @@ check() {
 for tool in ffmpeg ffprobe python3; do
   command -v "$tool" >/dev/null || fail "$tool not on PATH"
 done
-[ -x "$REC" ] || fail "rec binary not found at $REC (cargo build --release)"
+[ -x "$AGENTCAM" ] || fail "agentcam binary not found at $AGENTCAM (cargo build --release)"
 
 started=$(run start --tty --size 100x30 --out "$OUT" -- bash --norc)
 TAKE=$(printf '%s' "$started" | json 'j["take"]')
@@ -83,7 +83,7 @@ run key Return >/dev/null
 # The reply lands before the wait starts; --new still sees it because it counts from the last input.
 sleep 0.3
 run wait --new --text 'hello-2' --timeout 10 >/dev/null || fail "wait --new missed hello-2"
-stale=$("$REC" wait --new --text 'echo hello' --timeout 1 2>/dev/null) && fail "wait --new matched the echoed command"
+stale=$("$AGENTCAM" wait --new --text 'echo hello' --timeout 1 2>/dev/null) && fail "wait --new matched the echoed command"
 check "wait --new ignores what was echoed before the last input" 'j["error"]["code"] == "timeout"' "$stale"
 run wait --text 'echo hello' --timeout 1 >/dev/null || fail "plain wait no longer matches the screen"
 
@@ -92,13 +92,13 @@ run key Return >/dev/null
 idle=$(run wait --idle 1 --timeout 10)
 check "wait --idle returns idle" 'j["idle"] is True and j["t"] > 0' "$idle"
 check "wait --idle holds until the output stops" '"tick-6" in j["text"]' "$(run screen)"
-quick=$("$REC" wait --idle 5 --timeout 1 2>/dev/null) && fail "wait --idle outlasted its timeout"
+quick=$("$AGENTCAM" wait --idle 5 --timeout 1 2>/dev/null) && fail "wait --idle outlasted its timeout"
 check "wait --idle times out" 'j["error"]["code"] == "timeout"' "$quick"
 
 # Dead air, like an agent thinking between steps, for --tighten to cut.
 sleep 3
 
-again=$("$REC" start --tty -- true 2>/dev/null) && fail "second start succeeded while recording"
+again=$("$AGENTCAM" start --tty -- true 2>/dev/null) && fail "second start succeeded while recording"
 check "second start names the active take" \
   'j["error"]["code"] == "already_recording" and "'"$(basename "$TAKE")"'" in j["error"]["message"]' "$again"
 
@@ -151,12 +151,12 @@ for slug in 16x9 9x16; do
   echo "ok: $sheet is a ${sheet_size} PNG" >&2
 done
 reviewed=$(run review "$TAKE/export-9x16.mp4" --at 1)
-check "rec review re-checks an mp4 and writes a still" \
+check "agentcam review re-checks an mp4 and writes a still" \
   '"error" not in j and j["sheet"].endswith("export-9x16.sheet.png") and len(j["frames"]) == 1 and j["frames"][0]["t"] == 1.0' "$reviewed"
 [ "$(ffprobe -v error -show_entries stream=width,height -of csv=p=0 "$TAKE/export-9x16.at-1.png")" = "1080,1920" ] ||
-  fail "rec review --at did not write a full-size still"
+  fail "agentcam review --at did not write a full-size still"
 take_review=$(run review "$TAKE")
-check "rec review on a take reviews each export" \
+check "agentcam review on a take reviews each export" \
   '[r["path"].rsplit("/", 1)[1] for r in j["reviews"]] == ["export-16x9.mp4", "export-9x16.mp4"]' "$take_review"
 check "a wide grid fits 16:9 whole and follows the action in 9:16" \
   '[e["viewport"] for e in j["exports"]] == ["fit", "follow"]' "$exported"
@@ -197,7 +197,7 @@ replayed=$(run export "$TAKE" --layout 16:9 --plan "$OUT/plan.json")
 check "an unedited plan renders the --tighten edit" \
   'j["exports"][0]["tightened"] == '"$(printf '%s' "$tight" | json 'j["exports"][0]["tightened"]')" "$replayed"
 python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["segments"][1]["take"][1] += 1; json.dump(p, open(sys.argv[1], "w"))' "$OUT/plan.json"
-mismatched=$("$REC" export "$TAKE" --layout 16:9 --plan "$OUT/plan.json" 2>/dev/null) && fail "a plan for another take rendered"
+mismatched=$("$AGENTCAM" export "$TAKE" --layout 16:9 --plan "$OUT/plan.json" 2>/dev/null) && fail "a plan for another take rendered"
 check "a plan for another take is bad_args" 'j["error"]["code"] == "bad_args"' "$mismatched"
 
 stacked=$(run export "$TAKE" --layout 9:16 --region 50,0,50,30 --region 0,20,50,10 --tighten)
@@ -211,12 +211,12 @@ check "--region keeps the --tighten time map" \
   'j["exports"][0]["tightened"] == '"$(printf '%s' "$tight" | json 'j["exports"][0]["tightened"]')" "$stacked"
 probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of json "$TAKE/export-9x16.mp4")
 check "stacked export is 1080x1920" 'j["streams"][0] == {"width": 1080, "height": 1920}' "$probe"
-outside=$("$REC" export "$TAKE" --layout 9:16 --region 60,0,41,30 2>/dev/null) && fail "a region past the grid exported"
+outside=$("$AGENTCAM" export "$TAKE" --layout 9:16 --region 60,0,41,30 2>/dev/null) && fail "a region past the grid exported"
 check "a region past the grid is bad_args" 'j["error"]["code"] == "bad_args"' "$outside"
-empty=$("$REC" export "$TAKE" --layout 9:16 --region 0,0,0,30 2>/dev/null) && fail "an empty region exported"
+empty=$("$AGENTCAM" export "$TAKE" --layout 9:16 --region 0,0,0,30 2>/dev/null) && fail "an empty region exported"
 check "an empty region is bad_args" 'j["error"]["code"] == "bad_args"' "$empty"
 
-both=$("$REC" start --tty --for 9:16 --size 80x24 -- true 2>/dev/null) && fail "--for with --size succeeded"
+both=$("$AGENTCAM" start --tty --for 9:16 --size 80x24 -- true 2>/dev/null) && fail "--for with --size succeeded"
 check "--for with --size is bad_args" 'j["error"]["code"] == "bad_args"' "$both"
 
 started=$(run start --tty --for 9:16 --out "$OUT" -- bash --norc)
@@ -240,12 +240,12 @@ screen_lines() { printf '%s' "$(run screen)" | json 'j["text"]'; }
 
 started=$(run start --tty --size 100x30 --out "$OUT" -- bash --norc)
 TAKE=$(printf '%s' "$started" | json 'j["take"]')
-off=$("$REC" click 1 1 2>/dev/null) && fail "a click reached a shell with mouse reporting off"
+off=$("$AGENTCAM" click 1 1 2>/dev/null) && fail "a click reached a shell with mouse reporting off"
 check "click on a program without mouse reporting is mouse_off" 'j["error"]["code"] == "mouse_off"' "$off"
-off=$("$REC" drag 1 1 5 1 2>/dev/null) && fail "a drag reached a shell with mouse reporting off"
+off=$("$AGENTCAM" drag 1 1 5 1 2>/dev/null) && fail "a drag reached a shell with mouse reporting off"
 check "drag on a program without mouse reporting is mouse_off" 'j["error"]["code"] == "mouse_off"' "$off"
 run move 3 3 >/dev/null
-outside=$("$REC" click 100 0 2>/dev/null) && fail "a click outside the grid succeeded"
+outside=$("$AGENTCAM" click 100 0 2>/dev/null) && fail "a click outside the grid succeeded"
 check "a click outside the grid is bad_args" 'j["error"]["code"] == "bad_args"' "$outside"
 run stop >/dev/null
 
@@ -291,9 +291,9 @@ started=$(run start --tty --size 80x24 --out "$OUT" -- python3 "$here/query_prob
 TAKE=$(printf '%s' "$started" | json 'j["take"]')
 run wait --text 'probe done' --timeout 10 >/dev/null || fail "query probe never finished"
 seen=$(screen_lines | grep '=' | tr '\n' '|')
-want='da1=\x1b[?62;22c|kitty=\x1b[?0u|xtversion=\x1bP>|rec '"$("$REC" --version 2>/dev/null | awk '{print $2}')"'\x1b\\|da2=\x1b[>1;10;0c|dsr=\x1b[0n|cpr=\x1b[1;1R|'
+want='da1=\x1b[?62;22c|kitty=\x1b[?0u|xtversion=\x1bP>|agentcam '"$("$AGENTCAM" --version 2>/dev/null | awk '{print $2}')"'\x1b\\|da2=\x1b[>1;10;0c|dsr=\x1b[0n|cpr=\x1b[1;1R|'
 [ "$seen" = "$want" ] || fail "query replies were $seen, wanted $want"
-grep -qF 'u001bP>|rec' "$TAKE/term.cast" && fail "a query reply leaked into term.cast"
+grep -qF 'u001bP>|agentcam' "$TAKE/term.cast" && fail "a query reply leaked into term.cast"
 echo "ok: query replies" >&2
 run key Return >/dev/null
 sleep 0.5
@@ -323,6 +323,6 @@ seen=$(screen_lines | grep '^key ' | tr '\n' '|')
 want='key \x1b[97u|key \x1b[13u|'
 [ "$seen" = "$want" ] || fail "keys under kitty flag 8 were $seen, wanted $want"
 echo "ok: keys under kitty report-all-keys" >&2
-"$REC" stop >/dev/null 2>&1
+"$AGENTCAM" stop >/dev/null 2>&1
 
 echo "PASS: $TAKE"

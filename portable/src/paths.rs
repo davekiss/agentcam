@@ -13,7 +13,7 @@ fn home() -> Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub fn default_out_dir() -> Result<PathBuf> {
-    Ok(home()?.join("Movies/rec"))
+    Ok(home()?.join("Movies/agentcam"))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -23,7 +23,7 @@ pub fn default_out_dir() -> Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub fn state_dir() -> Result<PathBuf> {
-    Ok(home()?.join("Library/Application Support/rec"))
+    Ok(home()?.join("Library/Application Support/agentcam"))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -35,8 +35,8 @@ pub fn state_dir() -> Result<PathBuf> {
 fn xdg(var: &str, fallback: &str) -> Result<PathBuf> {
     // The XDG spec says relative values are invalid and must be ignored.
     match std::env::var_os(var).map(PathBuf::from) {
-        Some(p) if p.is_absolute() => Ok(p.join("rec")),
-        _ => Ok(home()?.join(fallback).join("rec")),
+        Some(p) if p.is_absolute() => Ok(p.join("agentcam")),
+        _ => Ok(home()?.join(fallback).join("agentcam")),
     }
 }
 
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn same_second_takes_get_numbered_suffixes() {
-        let out = std::env::temp_dir().join(format!("rec-test-{}", std::process::id()));
+        let out = std::env::temp_dir().join(format!("agentcam-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let now = chrono::Local
             .with_ymd_and_hms(2026, 10, 2, 21, 35, 1)

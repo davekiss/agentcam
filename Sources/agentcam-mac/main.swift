@@ -5,20 +5,20 @@ import RecKit
 
 struct Rec: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "rec",
+        commandName: "agentcam-mac",
         abstract: "Agent-first screen recorder. Every command prints one JSON object to stdout.",
         subcommands: [Sources.self, Start.self, Stop.self, Status.self, Mark.self, Record.self, Export.self]
     )
 }
 
 struct CaptureOptions: ParsableArguments {
-    @Option(help: "Display id to capture (see `rec sources`).") var display: UInt32?
-    @Option(help: "Window id to capture (see `rec sources`).") var window: UInt32?
+    @Option(help: "Display id to capture (see `agentcam-mac sources`).") var display: UInt32?
+    @Option(help: "Window id to capture (see `agentcam-mac sources`).") var window: UInt32?
     @Option(help: "Capture this app's frontmost window.") var app: String?
     @Flag(help: "Do not record the webcam.") var noCam = false
     @Flag(help: "Do not record the microphone.") var noMic = false
     @Flag(help: "Do not show the floating webcam preview.") var noPreview = false
-    @Option(help: "Parent folder for the take (default ~/Movies/rec).") var out: String?
+    @Option(help: "Parent folder for the take (default ~/Movies/agentcam).") var out: String?
 
     func validate() throws {
         if [display != nil, window != nil, app != nil].filter({ $0 }).count > 1 {
@@ -37,7 +37,7 @@ struct CaptureOptions: ParsableArguments {
         RecordOptions(selector: selector, camera: !noCam, mic: !noMic, preview: !noPreview, takeDir: takeDir, duration: duration)
     }
 
-    /// The flags as `rec record` expects them, for the detached child.
+    /// The flags as `agentcam-mac record` expects them, for the detached child.
     var forwarded: [String] {
         var args: [String] = []
         if let display { args += ["--display", String(display)] }

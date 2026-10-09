@@ -70,12 +70,12 @@ public enum SourceCatalog {
             return .display(d, await MainActor.run { describe(d) })
         case let .display(id):
             guard let d = content.displays.first(where: { $0.displayID == id }) else {
-                throw CommandError(.sourceNotFound, "no display with id \(id); run `rec sources`")
+                throw CommandError(.sourceNotFound, "no display with id \(id); run `agentcam-mac sources`")
             }
             return .display(d, await MainActor.run { describe(d) })
         case let .window(id):
             guard let w = content.windows.first(where: { $0.windowID == id }) else {
-                throw CommandError(.sourceNotFound, "no on-screen window with id \(id); run `rec sources`")
+                throw CommandError(.sourceNotFound, "no on-screen window with id \(id); run `agentcam-mac sources`")
             }
             return .window(w, describe(w))
         case let .app(name):
@@ -85,7 +85,7 @@ public enum SourceCatalog {
                 $0.owningApplication?.applicationName.lowercased() == needle
                     || $0.owningApplication?.bundleIdentifier.lowercased() == needle
             }) else {
-                throw CommandError(.sourceNotFound, "no on-screen window for app \"\(name)\"; run `rec sources`")
+                throw CommandError(.sourceNotFound, "no on-screen window for app \"\(name)\"; run `agentcam-mac sources`")
             }
             return .window(w, describe(w))
         }

@@ -3,7 +3,7 @@ import Foundation
 public struct ActiveRecord: Codable, Equatable, Sendable {
     public var pid: Int32
     public var take: String
-    /// Wall-clock moment of t0. Stored with milliseconds so `rec mark` and `rec status` can place
+    /// Wall-clock moment of t0. Stored with milliseconds so `agentcam-mac mark` and `agentcam-mac status` can place
     /// "now" on the take clock without talking to the recorder.
     public var startedAt: Date
 
@@ -23,7 +23,7 @@ public struct ActiveRecord: Codable, Equatable, Sendable {
 public enum ActiveStore {
     public static var url: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/rec/active.json")
+            .appendingPathComponent("Library/Application Support/agentcam-mac/active.json")
     }
 
     private static let formatter: ISO8601DateFormatter = {

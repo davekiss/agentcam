@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Builds rec, synthesizes a fixture take, exports both layouts, and checks the MP4s with ffprobe.
+# Builds agentcam-mac, synthesizes a fixture take, exports both layouts, and checks the MP4s with ffprobe.
 # Frames at t=0.7 (border intro) and t=5 (calm) are written as PNGs for a visual check.
 # Usage: scripts/verify-export.sh [work-dir]
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=${1:-$root/fixtures/verify}
-rec="$root/.build/debug/rec"
+rec="$root/.build/debug/agentcam-mac"
 fail=0
 
 check() {

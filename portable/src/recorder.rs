@@ -1,4 +1,4 @@
-//! The one recording code path: `rec record`. `rec start` runs this same thing detached.
+//! The one recording code path: `agentcam record`. `agentcam start` runs this same thing detached.
 //! The lifecycle, the control socket, and the timeline live here; what is recorded and how
 //! input reaches it is a `Capture` (a PTY in tty.rs, a virtual display in x11.rs).
 
@@ -84,7 +84,7 @@ pub trait Capture: Send + Sync {
 
     fn key(&self, combo: &str) -> Result<()>;
 
-    /// A value that changes whenever what the take records changes, for `rec wait --idle`.
+    /// A value that changes whenever what the take records changes, for `agentcam wait --idle`.
     fn fingerprint(&self) -> Result<u64>;
 
     fn click(&self, _x: u32, _y: u32, _button: Button) -> Result<()> {
@@ -130,7 +130,7 @@ pub struct Started {
     pub journal: Arc<Journal>,
     pub capture: Box<dyn Capture>,
     pub tracks: Vec<Track>,
-    /// The X display an x11 take records, for `rec start` to hand back.
+    /// The X display an x11 take records, for `agentcam start` to hand back.
     pub display: Option<String>,
 }
 
@@ -202,7 +202,7 @@ pub fn record(opts: RecordOptions) -> Result<Take> {
 }
 
 /// Records until the first finish reason, then finalizes `take` on disk and answers
-/// every `rec stop` that is waiting on it.
+/// every `agentcam stop` that is waiting on it.
 fn run(take: &mut Take, active: &mut Active, dir: &Path, opts: &RecordOptions) -> Result<()> {
     let listener = protocol::bind(&protocol::socket_path(dir))?;
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -251,7 +251,7 @@ fn run(take: &mut Take, active: &mut Active, dir: &Path, opts: &RecordOptions) -
         });
     }
 
-    eprintln!("rec: recording {}", dir.display());
+    eprintln!("agentcam: recording {}", dir.display());
 
     let journal = &shared.journal;
     let deadline = opts
@@ -279,7 +279,7 @@ fn run(take: &mut Take, active: &mut Active, dir: &Path, opts: &RecordOptions) -
     };
     let duration = journal.now();
     journal.live.store(false, Ordering::Relaxed);
-    eprintln!("rec: finishing ({reason:?}) at {duration}s");
+    eprintln!("agentcam: finishing ({reason:?}) at {duration}s");
 
     let torn = shared.capture.teardown();
     let failure = match reason {

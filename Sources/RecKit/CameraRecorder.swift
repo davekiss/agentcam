@@ -4,7 +4,7 @@ import Foundation
 
 final class AudioTrackWriter: @unchecked Sendable {
     let url: URL
-    let queue = DispatchQueue(label: "rec.writer.mic")
+    let queue = DispatchQueue(label: "agentcam.writer.mic")
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
     private(set) var firstHostTime: Double?

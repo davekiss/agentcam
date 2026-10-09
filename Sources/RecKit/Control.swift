@@ -25,7 +25,7 @@ public struct MarkResult: Encodable {
 
 public enum Control {
     public static var defaultRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/rec")
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/agentcam")
     }
 
     /// Two takes started in the same second get distinct folders.
@@ -45,7 +45,7 @@ public enum Control {
     /// connection, the child's SCStream.startCapture never returns (observed on macOS 15.3).
     public static func preflight(_ options: RecordOptions) async throws {
         if let active = ActiveStore.current() {
-            throw CommandError(.alreadyRecording, "already recording \(active.take) (pid \(active.pid)); run `rec stop` first")
+            throw CommandError(.alreadyRecording, "already recording \(active.take) (pid \(active.pid)); run `agentcam-mac stop` first")
         }
         try SourceCatalog.ensureScreenRecordingPermission()
         if options.camera { try await CameraRecorder.ensurePermission(for: .video) }

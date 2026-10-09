@@ -49,6 +49,6 @@ public enum Output {
     }
 
     public static func log(_ message: String) {
-        FileHandle.standardError.write(Data("[rec] \(message)\n".utf8))
+        FileHandle.standardError.write(Data("[agentcam-mac] \(message)\n".utf8))
     }
 }

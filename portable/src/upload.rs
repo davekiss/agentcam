@@ -1,4 +1,4 @@
-//! `rec export --upload`: the VM, and the take folder with it, is gone when the session
+//! `agentcam export --upload`: the VM, and the take folder with it, is gone when the session
 //! ends, so each export is delivered somewhere that outlives it.
 
 use crate::error::{RecError, Result};
@@ -10,7 +10,7 @@ use ureq::http::Uri;
 
 pub const BLOB_TOKEN_VAR: &str = "BLOB_READ_WRITE_TOKEN";
 /// Points `blob` uploads at another API base, for tests.
-pub const BLOB_API_VAR: &str = "REC_BLOB_API_URL";
+pub const BLOB_API_VAR: &str = "AGENTCAM_BLOB_API_URL";
 const BLOB_API: &str = "https://vercel.com/api/blob";
 /// The `x-api-version` that @vercel/blob 2.8 sends.
 const BLOB_API_VERSION: &str = "12";
@@ -44,7 +44,7 @@ impl Access {
     }
 }
 
-/// One export as `rec export` prints it, with `url` once it is uploaded.
+/// One export as `agentcam export` prints it, with `url` once it is uploaded.
 #[derive(Serialize)]
 pub struct Delivered<E> {
     #[serde(flatten)]
@@ -122,7 +122,7 @@ impl Target {
         match self {
             Target::Blob { token, api, access } => {
                 let name = file.file_name().unwrap_or_default().to_string_lossy();
-                let pathname = format!("rec/{take_id}/{name}");
+                let pathname = format!("agentcam/{take_id}/{name}");
                 let store = token.split('_').nth(3).unwrap_or_default();
                 let mut resp = agent
                     .put(format!("{api}/?pathname={}", form_encode(&pathname)))
@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn pathname_is_form_encoded_like_url_search_params() {
         assert_eq!(
-            form_encode("rec/take-20261004-064206/export-16x9.mp4"),
-            "rec%2Ftake-20261004-064206%2Fexport-16x9.mp4"
+            form_encode("agentcam/take-20261004-064206/export-16x9.mp4"),
+            "agentcam%2Ftake-20261004-064206%2Fexport-16x9.mp4"
         );
     }
 }

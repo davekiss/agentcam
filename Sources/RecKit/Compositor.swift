@@ -176,7 +176,7 @@ final class LayoutInstruction: NSObject, AVVideoCompositionInstructionProtocol {
 }
 
 final class LayoutCompositor: NSObject, AVVideoCompositing {
-    private let queue = DispatchQueue(label: "rec.compositor")
+    private let queue = DispatchQueue(label: "agentcam.compositor")
 
     let sourcePixelBufferAttributes: [String: any Sendable]? = [
         kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange],

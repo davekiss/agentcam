@@ -305,7 +305,7 @@ impl Viewport {
         }
     }
 
-    /// How `rec export` reports it.
+    /// How `agentcam export` reports it.
     pub fn kind(&self) -> &'static str {
         match self {
             Viewport::Fit(_) => "fit",
