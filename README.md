@@ -56,7 +56,8 @@ agentcam export "$take" --layout 9:16
 The agentcam skill tells an agent how to plan a take, drive it, export it, and check the result before handing it over. In Claude Code:
 
 ```
-/plugin install agentcam --marketplace davekiss/agentcam
+/plugin marketplace add davekiss/mods
+/plugin install agentcam@davekiss
 ```
 
 For other agents, point them at [skills/agentcam/SKILL.md](skills/agentcam/SKILL.md) or paste it into your `AGENTS.md`.
